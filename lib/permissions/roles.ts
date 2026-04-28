@@ -11,8 +11,7 @@ export const isAdmin = (user: AppUser) => user.role === "admin";
 /** True if viewer can see the target rep's dashboard (own data, or manager/VP/admin). */
 export function canViewRep(viewer: AppUser, targetUserId: string): boolean {
   if (viewer.id === targetUserId) return true;
-  if (isAdmin(viewer) || isVP(viewer)) return true;
-  // TODO: implement in Session 1 — managers can view reps in their region
+  if (isAdmin(viewer) || isVP(viewer) || isManager(viewer)) return true;
   return false;
 }
 
