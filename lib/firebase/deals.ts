@@ -1,5 +1,5 @@
 // lib/firebase/deals.ts — Deal CRUD for forecast_v1/deals.
-// All writes log to editHistory. Stage transitions to "won" trigger customer computed-field stubs.
+// All writes log to editHistory. Stage transitions to "won" trigger customer recomputation.
 //
 // FIREBASE RULE NOTE: add ".indexOn": ["ownerId"] to the deals node so
 // orderByChild("ownerId") queries don't full-scan. Example in rules:
@@ -19,6 +19,12 @@ import {
 } from "firebase/database";
 import { db } from "./client";
 import { logEdit } from "./history";
+import {
+  recomputeCustomerProfile,
+  recomputeCustomerMeetings,
+  recomputeCommissionStatus,
+  maybePromoteCustomerLifecycle,
+} from "./customers";
 import type { Deal } from "@/types";
 import { FORECAST_ELIGIBLE_STRUCTURES, STAGE_DEFAULT_PROBABILITY } from "@/types";
 
@@ -243,17 +249,17 @@ export async function deleteDeal(
   await remove(ref(db, `${DEALS_PATH}/${dealId}`));
 }
 
-// --- Customer trigger stubs (wired in Session 4) ---
+// --- Customer trigger handlers ---
 
 async function _onDealWon(customerId: string) {
-  // TODO: Session 4 — import and call:
-  //   maybePromoteCustomerLifecycle(customerId)
-  //   recomputeCustomerProfile(customerId)
-  //   recomputeCommissionStatus(customerId, [currentYear, currentYear + 1])
-  void customerId;
+  const currentYear = new Date().getFullYear();
+  await Promise.all([
+    maybePromoteCustomerLifecycle(customerId),
+    recomputeCustomerProfile(customerId),
+    recomputeCommissionStatus(customerId, [currentYear, currentYear + 1]),
+  ]);
 }
 
 async function _onMeetingDatesChanged(customerId: string) {
-  // TODO: Session 4 — import and call recomputeCustomerMeetings(customerId)
-  void customerId;
+  await recomputeCustomerMeetings(customerId);
 }

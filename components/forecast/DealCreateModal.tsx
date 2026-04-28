@@ -1,5 +1,5 @@
 // components/forecast/DealCreateModal.tsx — New deal creation dialog.
-// Customer name is free text in Session 3; replaced with a proper customer picker in Session 4.
+// Customer selected via CustomerPickerField (replaces free-text from Session 3).
 // Stage selection auto-sets the default close probability.
 // Override modal fires if user deviates >±10pp from stage default.
 
@@ -9,7 +9,10 @@ import { useState } from "react";
 import type { DealStage, DealStructure, ProcedureTier } from "@/types";
 import { STAGE_DEFAULT_PROBABILITY, FORECAST_ELIGIBLE_STRUCTURES } from "@/types";
 import { createDeal } from "@/lib/firebase/deals";
+import type { Customer } from "@/types";
 import { ProbabilityOverrideModal } from "./ProbabilityOverrideModal";
+import { CustomerPickerField } from "@/components/customers/CustomerPickerField";
+import { CustomerCreateModal } from "@/components/customers/CustomerCreateModal";
 import {
   Dialog,
   DialogContent,
@@ -37,32 +40,31 @@ interface DealCreateModalProps {
 }
 
 const STAGE_OPTIONS: { value: DealStage; label: string }[] = [
-  { value: "lead", label: "Lead (10%)" },
+  { value: "lead",      label: "Lead (10%)" },
   { value: "discovery", label: "Discovery (25%)" },
-  { value: "quoted", label: "Quoted (50%)" },
-  { value: "verbal", label: "Verbal (75%)" },
+  { value: "quoted",    label: "Quoted (50%)" },
+  { value: "verbal",    label: "Verbal (75%)" },
 ];
 
 const TIER_OPTIONS: { value: ProcedureTier; label: string }[] = [
   { value: "everything", label: "Everything (Full arch + zygo/ptery)" },
-  { value: "full_arch", label: "Full Arch" },
-  { value: "ra_only", label: "RA Only (zygo/ptery, not full arch)" },
-  { value: "standard", label: "Standard" },
-  { value: "course", label: "Course / Training" },
-  { value: "tools", label: "Tools / Supplies" },
+  { value: "full_arch",  label: "Full Arch" },
+  { value: "ra_only",    label: "RA Only (zygo/ptery, not full arch)" },
+  { value: "standard",   label: "Standard" },
+  { value: "course",     label: "Course / Training" },
+  { value: "tools",      label: "Tools / Supplies" },
 ];
 
-const STRUCTURE_OPTIONS: { value: DealStructure; label: string; eligible: boolean }[] = [
-  { value: "standalone", label: "Standalone", eligible: true },
-  { value: "package", label: "Package", eligible: true },
-  { value: "bulk", label: "Bulk Order", eligible: true },
-  { value: "combo", label: "Combo (course + clinical)", eligible: true },
-  { value: "trial", label: "Trial Surgery (pipeline only)", eligible: false },
-  { value: "mentorship", label: "Mentorship (pipeline only)", eligible: false },
+const STRUCTURE_OPTIONS: { value: DealStructure; label: string }[] = [
+  { value: "standalone",  label: "Standalone" },
+  { value: "package",     label: "Package" },
+  { value: "bulk",        label: "Bulk Order" },
+  { value: "combo",       label: "Combo (course + clinical)" },
+  { value: "trial",       label: "Trial Surgery (pipeline only)" },
+  { value: "mentorship",  label: "Mentorship (pipeline only)" },
 ];
 
 interface FormState {
-  customerName: string;
   stage: DealStage;
   procedureTier: ProcedureTier;
   dealStructure: DealStructure;
@@ -82,7 +84,6 @@ export function DealCreateModal({
   region,
 }: DealCreateModalProps) {
   const [form, setForm] = useState<FormState>({
-    customerName: "",
     stage: DEFAULT_STAGE,
     procedureTier: "standard",
     dealStructure: "standalone",
@@ -92,11 +93,19 @@ export function DealCreateModal({
     decisionMaker: "",
     notes: "",
   });
+  const [selectedCustomer, setSelectedCustomer] = useState<{
+    customerId: string;
+    customerName: string;
+  } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Override modal state: holds the proposed probability while waiting for reason
+  // Override modal
   const [pendingProb, setPendingProb] = useState<number | null>(null);
+
+  // New-customer sub-modal
+  const [showCustomerCreate, setShowCustomerCreate] = useState(false);
+  const [customerCreateInitialName, setCustomerCreateInitialName] = useState("");
 
   function set(field: keyof FormState, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -121,8 +130,8 @@ export function DealCreateModal({
 
   async function handleSubmit(e: React.FormEvent, overrideReason?: string) {
     e.preventDefault();
-    if (!form.customerName.trim()) {
-      setError("Customer name is required.");
+    if (!selectedCustomer) {
+      setError("Please select or create a customer.");
       return;
     }
     const dealValue = parseFloat(form.dealValue);
@@ -136,7 +145,6 @@ export function DealCreateModal({
       return;
     }
 
-    // Re-check override before saving
     const defaultProb = STAGE_DEFAULT_PROBABILITY[form.stage];
     const isOverride = Math.abs(closeProbability - defaultProb) > 10;
     if (isOverride && !overrideReason) {
@@ -149,8 +157,8 @@ export function DealCreateModal({
     try {
       await createDeal(
         {
-          customerId: "",
-          customerName: form.customerName.trim(),
+          customerId: selectedCustomer.customerId,
+          customerName: selectedCustomer.customerName,
           ownerId,
           region,
           procedureTier: form.procedureTier,
@@ -181,7 +189,6 @@ export function DealCreateModal({
 
   function resetForm() {
     setForm({
-      customerName: "",
       stage: DEFAULT_STAGE,
       procedureTier: "standard",
       dealStructure: "standalone",
@@ -191,18 +198,17 @@ export function DealCreateModal({
       decisionMaker: "",
       notes: "",
     });
+    setSelectedCustomer(null);
     setError(null);
     setPendingProb(null);
   }
 
-  const isForecastEligible = FORECAST_ELIGIBLE_STRUCTURES.includes(
-    form.dealStructure
-  );
+  const isForecastEligible = FORECAST_ELIGIBLE_STRUCTURES.includes(form.dealStructure);
 
   return (
     <>
       <Dialog
-        open={open && pendingProb === null}
+        open={open && pendingProb === null && !showCustomerCreate}
         onOpenChange={(o) => {
           if (!o) { onClose(); resetForm(); }
         }}
@@ -212,24 +218,18 @@ export function DealCreateModal({
             <DialogTitle>New Deal</DialogTitle>
           </DialogHeader>
 
-          <form
-            onSubmit={(e) => handleSubmit(e)}
-            className="space-y-4 mt-2"
-          >
-            {/* Customer */}
+          <form onSubmit={(e) => handleSubmit(e)} className="space-y-4 mt-2">
+            {/* Customer picker */}
             <div className="space-y-1.5">
-              <Label htmlFor="customerName">
-                Customer name{" "}
-                <span className="text-muted-foreground font-normal">
-                  (Session 4 adds customer picker)
-                </span>
-              </Label>
-              <Input
-                id="customerName"
-                placeholder="Dr. Patel / Practice Name"
-                required
-                value={form.customerName}
-                onChange={(e) => set("customerName", e.target.value)}
+              <Label>Customer</Label>
+              <CustomerPickerField
+                ownerId={ownerId}
+                value={selectedCustomer}
+                onChange={setSelectedCustomer}
+                onCreateNew={(name) => {
+                  setCustomerCreateInitialName(name);
+                  setShowCustomerCreate(true);
+                }}
               />
             </div>
 
@@ -241,14 +241,10 @@ export function DealCreateModal({
                   value={form.procedureTier}
                   onValueChange={(v) => set("procedureTier", v as ProcedureTier)}
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {TIER_OPTIONS.map(({ value, label }) => (
-                      <SelectItem key={value} value={value}>
-                        {label}
-                      </SelectItem>
+                      <SelectItem key={value} value={value}>{label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -257,25 +253,17 @@ export function DealCreateModal({
                 <Label>Deal structure</Label>
                 <Select
                   value={form.dealStructure}
-                  onValueChange={(v) =>
-                    set("dealStructure", v as DealStructure)
-                  }
+                  onValueChange={(v) => set("dealStructure", v as DealStructure)}
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {STRUCTURE_OPTIONS.map(({ value, label }) => (
-                      <SelectItem key={value} value={value}>
-                        {label}
-                      </SelectItem>
+                      <SelectItem key={value} value={value}>{label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 {!isForecastEligible && (
-                  <p className="text-xs text-orange-600">
-                    Pipeline only — not counted in forecast
-                  </p>
+                  <p className="text-xs text-orange-600">Pipeline only — not counted in forecast</p>
                 )}
               </div>
             </div>
@@ -288,14 +276,10 @@ export function DealCreateModal({
                   value={form.stage}
                   onValueChange={(v) => handleStageChange(v as DealStage)}
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {STAGE_OPTIONS.map(({ value, label }) => (
-                      <SelectItem key={value} value={value}>
-                        {label}
-                      </SelectItem>
+                      <SelectItem key={value} value={value}>{label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -385,7 +369,7 @@ export function DealCreateModal({
         </DialogContent>
       </Dialog>
 
-      {/* Override reason modal */}
+      {/* Probability override modal */}
       {pendingProb !== null && (
         <ProbabilityOverrideModal
           open
@@ -393,19 +377,32 @@ export function DealCreateModal({
           proposedProbability={pendingProb}
           onConfirm={(reason) => {
             setPendingProb(null);
-            // Re-run submit with the confirmed override reason
             handleSubmit(
               { preventDefault: () => {} } as React.FormEvent,
               reason
             );
           }}
           onCancel={() => {
-            // Revert probability to stage default
-            set(
-              "closeProbability",
-              String(STAGE_DEFAULT_PROBABILITY[form.stage])
-            );
+            set("closeProbability", String(STAGE_DEFAULT_PROBABILITY[form.stage]));
             setPendingProb(null);
+          }}
+        />
+      )}
+
+      {/* New customer sub-modal */}
+      {showCustomerCreate && (
+        <CustomerCreateModal
+          open
+          ownerId={ownerId}
+          region={region}
+          initialName={customerCreateInitialName}
+          onClose={() => setShowCustomerCreate(false)}
+          onSuccess={(customer: Customer) => {
+            setSelectedCustomer({
+              customerId: customer.id,
+              customerName: customer.name,
+            });
+            setShowCustomerCreate(false);
           }}
         />
       )}
