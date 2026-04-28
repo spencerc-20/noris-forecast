@@ -10,7 +10,7 @@ import { DealRow } from "./DealRow";
 
 interface DealListProps {
   deals: Deal[];
-  /** Lead temperatures keyed by dealId — will be keyed by customerId in Session 3. */
+  /** Lead temperatures keyed by customerId. */
   leadTemperatures?: Record<string, LeadTemperature>;
   onDealClick?: (dealId: string) => void;
 }
@@ -53,7 +53,7 @@ export function DealList({
           <DealRow
             key={deal.id}
             deal={deal}
-            leadTemperature={leadTemperatures[deal.id]}
+            leadTemperature={leadTemperatures[deal.customerId]}
             onClick={() => onDealClick?.(deal.id)}
           />
         ))
@@ -80,7 +80,7 @@ export function DealList({
               <DealRow
                 key={deal.id}
                 deal={deal}
-                leadTemperature={leadTemperatures[deal.id]}
+                leadTemperature={leadTemperatures[deal.customerId]}
                 onClick={() => onDealClick?.(deal.id)}
               />
             ))}
