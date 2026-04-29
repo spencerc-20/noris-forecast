@@ -131,69 +131,129 @@ function parseCellNumber(raw: string | undefined): number {
   return isFinite(n) ? n : 0;
 }
 
-/** Parse Sheet2 CSV into per-customer product summaries. */
+// ── Shared row processor (used by both sync and async parsers) ────────────────
+
+/**
+ * Apply one parsed CSV row to the running customer state.
+ * Mutates `summaries` and returns the (possibly updated) `current` customer.
+ */
+function applyRow(
+  row: Record<string, string>,
+  summaries: CustomerProductSummary[],
+  current: CustomerProductSummary | null
+): CustomerProductSummary | null {
+  const rawCustomer = (row["Customer"] ?? "").trim();
+  const rawFamily = (row["Product Family"] ?? "").trim();
+  const state = (row["State"] ?? "").trim().toUpperCase();
+
+  if (rawCustomer) {
+    if (current) summaries.push(current);
+    // Skip DO NOT USE customers
+    if (/\bdo\s+not\s+use\b/i.test(rawCustomer)) return null;
+    return { customerName: rawCustomer, state, productFamilyBreakdown: {}, profile: "new" };
+  }
+
+  if (!current) return null;
+
+  // Skip Total rows and rows with no product family
+  if (!rawFamily || rawFamily.toLowerCase() === "total") return current;
+
+  // Skip pure credit rows — obligo = order, credit = return
+  const oc = (row["Obligo/Credit"] ?? "").toLowerCase().trim();
+  if (oc === "credit") return current;
+
+  // Accumulate qty + sales per family.
+  // Key is sanitized for Firebase (no . # $ [ ] /); normalizeFamily() reverses
+  // sanitization so deriveProfile() still matches the known family sets.
+  const familyKey = sanitizeFamilyKey(rawFamily);
+  const qty = parseCellNumber(row["Qty"]);
+  const sales = parseCellNumber(row["Sales $"]);
+
+  if (!current.productFamilyBreakdown[familyKey]) {
+    current.productFamilyBreakdown[familyKey] = { qty: 0, sales: 0 };
+  }
+  current.productFamilyBreakdown[familyKey].qty += qty;
+  current.productFamilyBreakdown[familyKey].sales += sales;
+  return current;
+}
+
+function finalizeProfiles(summaries: CustomerProductSummary[]): void {
+  for (const summary of summaries) {
+    summary.profile = deriveProfile(summary.productFamilyBreakdown);
+  }
+}
+
+// ── Synchronous parser (kept for non-browser contexts, e.g. scripts/) ─────────
+
+/** Parse Sheet2 CSV into per-customer product summaries (synchronous). */
 export function parseSheet2(csvText: string): CustomerProductSummary[] {
-  const result = Papa.parse<Record<string, string>>(csvText, {
+  const { data } = Papa.parse<Record<string, string>>(csvText, {
     header: true,
-    skipEmptyLines: false, // keep empty rows — customer name appears only on first row per block
+    skipEmptyLines: false,
     transformHeader: (h) => h.trim(),
   });
 
   const summaries: CustomerProductSummary[] = [];
   let current: CustomerProductSummary | null = null;
-
-  for (const row of result.data) {
-    const rawCustomer = (row["Customer"] ?? "").trim();
-    const rawFamily = (row["Product Family"] ?? "").trim();
-    const state = (row["State"] ?? "").trim().toUpperCase();
-
-    // New customer block
-    if (rawCustomer) {
-      if (current) summaries.push(current);
-
-      // Skip DO NOT USE customers
-      if (/\bdo\s+not\s+use\b/i.test(rawCustomer)) {
-        current = null;
-        continue;
-      }
-
-      current = {
-        customerName: rawCustomer,
-        state,
-        productFamilyBreakdown: {},
-        profile: "new",
-      };
-    }
-
-    if (!current) continue;
-
-    // Skip Total rows and rows with no product family
-    if (!rawFamily || rawFamily.toLowerCase() === "total") continue;
-
-    // Skip pure credit rows — obligo = order, credit = return
-    const obligoCredit = (row["Obligo/Credit"] ?? "").toLowerCase().trim();
-    if (obligoCredit === "credit") continue;
-
-    // Accumulate qty + sales per family.
-    // Key is sanitized for Firebase (no . # $ [ ] /); normalizeFamily() reverses
-    // sanitization so deriveProfile() still matches the known family sets.
-    const familyKey = sanitizeFamilyKey(rawFamily);
-    const qty = parseCellNumber(row["Qty"]);
-    const sales = parseCellNumber(row["Sales $"]);
-
-    if (!current.productFamilyBreakdown[familyKey]) {
-      current.productFamilyBreakdown[familyKey] = { qty: 0, sales: 0 };
-    }
-    current.productFamilyBreakdown[familyKey].qty += qty;
-    current.productFamilyBreakdown[familyKey].sales += sales;
-  }
-
+  for (const row of data) current = applyRow(row, summaries, current);
   if (current) summaries.push(current);
-
-  // Derive profile for each customer from their breakdown
-  for (const summary of summaries) {
-    summary.profile = deriveProfile(summary.productFamilyBreakdown);
-  }
-
+  finalizeProfiles(summaries);
   return summaries;
+}
+
+// ── Async streaming parser (for browser use — keeps UI responsive) ─────────────
+
+/**
+ * Async version of parseSheet2. Uses PapaParse's chunk API with pause/resume so
+ * the browser event loop gets control between 64 KB chunks — preventing the main
+ * thread from freezing on large files (≥ 10 MB / 100 k rows).
+ *
+ * Calls onProgress(parsedRows, estimatedTotalRows) after every chunk.
+ * Use in browser code; fall back to parseSheet2 in Node scripts.
+ */
+export function parseSheet2Async(
+  csvText: string,
+  onProgress?: (parsed: number, total: number) => void
+): Promise<CustomerProductSummary[]> {
+  // Fast newline count for progress denominator (~5 ms for 10 MB)
+  const estimatedTotal = (csvText.match(/\n/g) ?? []).length;
+
+  return new Promise<CustomerProductSummary[]>((resolve, reject) => {
+    const summaries: CustomerProductSummary[] = [];
+    let current: CustomerProductSummary | null = null;
+    let rowsProcessed = 0;
+
+    Papa.parse<Record<string, string>>(csvText, {
+      header: true,
+      skipEmptyLines: false,
+      transformHeader: (h) => h.trim(),
+      // 64 KB per chunk → ~320–640 rows/chunk at typical row sizes.
+      // Balances throughput vs how often we yield to the event loop.
+      chunkSize: 1024 * 64,
+
+      chunk(results: Papa.ParseResult<Record<string, string>>, parser: Papa.Parser) {
+        // Pause before processing so we hold the slot open for resume().
+        parser.pause();
+        for (const row of results.data) {
+          current = applyRow(row, summaries, current);
+          rowsProcessed++;
+        }
+        onProgress?.(rowsProcessed, estimatedTotal);
+        // Yield to the event loop (lets React re-render the progress counter),
+        // then continue with the next chunk.
+        setTimeout(() => parser.resume(), 0);
+      },
+
+      complete() {
+        if (current) summaries.push(current);
+        finalizeProfiles(summaries);
+        onProgress?.(estimatedTotal, estimatedTotal);
+        resolve(summaries);
+      },
+
+      error(err: Error) {
+        reject(err);
+      },
+    });
+  });
 }

@@ -8,7 +8,8 @@ import { useRef, useState } from "react";
 import { format } from "date-fns";
 import { parseCsv } from "@/lib/import/csvParser";
 import { validateRows } from "@/lib/import/csvValidator";
-import { parseSheet2 } from "@/lib/import/sheet2Parser";
+import { parseSheet2Async } from "@/lib/import/sheet2Parser";
+import type { CustomerProductSummary } from "@/lib/import/sheet2Parser";
 import {
   runImport,
   runBulkImport,
@@ -39,6 +40,8 @@ interface PreviewData {
   // Sheet2
   customerCount?: number;
   profileBreakdown?: Record<string, number>;
+  /** Cached parse output — passed to run functions to avoid re-parsing on import. */
+  sheet2Summaries?: CustomerProductSummary[];
   // Bulk-specific
   bulkPreview?: BulkPreview;
   repNameMap?: Record<string, string>; // repId → name
@@ -72,6 +75,8 @@ export function CsvImporter() {
   const [runError, setRunError] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [progress, setProgress] = useState<{ written: number; total: number } | null>(null);
+  /** Parse-phase progress — shown in the drop zone while the CSV is being parsed. */
+  const [parseProgress, setParseProgress] = useState<{ parsed: number; total: number } | null>(null);
 
   async function loadReps(): Promise<AppUser[]> {
     if (repsLoaded) return reps;
@@ -89,23 +94,41 @@ export function CsvImporter() {
     const isSheet2 = firstLine.toLowerCase().includes("product family");
 
     if (isSheet2) {
-      const summaries = parseSheet2(text);
+      // Show parse progress in the drop zone — Sheet2 files can be 10 MB+ with
+      // 100 k+ rows; parseSheet2Async yields to the event loop between 64 KB chunks.
+      setParseProgress({ parsed: 0, total: 0 });
+
+      let summaries: CustomerProductSummary[];
+      try {
+        summaries = await parseSheet2Async(text, (parsed, total) => {
+          setParseProgress({ parsed, total });
+        });
+      } finally {
+        setParseProgress(null);
+      }
+
       const profileBreakdown: Record<string, number> = {};
       for (const s of summaries) {
         profileBreakdown[s.profile] = (profileBreakdown[s.profile] ?? 0) + 1;
       }
 
-      let bulkPreview: BulkPreview | undefined;
       let repNameMap: Record<string, string> | undefined;
       if (mode === "bulk") {
         const allReps = await loadReps();
         repNameMap = Object.fromEntries(allReps.map((r) => [r.id, r.name]));
-        // For sheet2 bulk we don't have a separate preview fn — just show customer count
       } else {
         await loadReps();
       }
 
-      setPreview({ filename: file.name, csvText: text, format: "sheet2", customerCount: summaries.length, profileBreakdown, bulkPreview, repNameMap });
+      setPreview({
+        filename: file.name,
+        csvText: text,
+        format: "sheet2",
+        customerCount: summaries.length,
+        profileBreakdown,
+        sheet2Summaries: summaries, // cached — passed to run to avoid re-parsing
+        repNameMap,
+      });
     } else {
       const { rows, rawColumnNames, detectedFormat } = parseCsv(text);
       const { errors, validRows } = validateRows(rows);
@@ -156,7 +179,13 @@ export function CsvImporter() {
     try {
       if (mode === "bulk") {
         if (preview.format === "sheet2") {
-          const result = await runBulkSheet2Import(preview.csvText, preview.filename, appUser.id);
+          const result = await runBulkSheet2Import(
+            preview.csvText,
+            preview.filename,
+            appUser.id,
+            (done, total) => setProgress({ written: done, total }),
+            preview.sheet2Summaries // skip re-parse — already done during file load
+          );
           setDone({ updated: result.updated, skipped: result.skipped, errorCount: 0, format: "sheet2", mode: "bulk" });
         } else {
           const result = await runBulkImport(
@@ -169,7 +198,13 @@ export function CsvImporter() {
         }
       } else {
         if (preview.format === "sheet2") {
-          const result = await runSheet2Import(preview.csvText, preview.filename, targetRep!.id, appUser.id);
+          const result = await runSheet2Import(
+            preview.csvText,
+            preview.filename,
+            targetRep!.id,
+            appUser.id,
+            preview.sheet2Summaries // skip re-parse — already done during file load
+          );
           setDone({ updated: result.updated, skipped: result.skipped, errorCount: 0, format: "sheet2", mode: "single" });
         } else {
           const result = await runImport(preview.csvText, preview.filename, targetRep!.id, appUser.id);
@@ -190,6 +225,7 @@ export function CsvImporter() {
     setRunError("");
     setTargetRep(null);
     setProgress(null);
+    setParseProgress(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -217,7 +253,7 @@ export function CsvImporter() {
 
   // ── Running ───────────────────────────────────────────────────────────────
   if (step === "running") {
-    const pct = progress && progress.total > 0
+    const writePct = progress && progress.total > 0
       ? Math.round((progress.written / progress.total) * 100)
       : null;
 
@@ -229,12 +265,12 @@ export function CsvImporter() {
           <div className="w-full max-w-sm space-y-2">
             <p className="text-sm text-center text-muted-foreground">
               Writing {progress.written.toLocaleString()} / {progress.total.toLocaleString()}
-              {pct !== null && <span className="ml-1 text-zinc-500">({pct}%)</span>}
+              {writePct !== null && <span className="ml-1 text-zinc-500">({writePct}%)</span>}
             </p>
             <div className="h-2 w-full rounded-full bg-zinc-100 overflow-hidden">
               <div
                 className="h-full bg-zinc-700 rounded-full transition-all duration-200"
-                style={{ width: `${pct ?? 0}%` }}
+                style={{ width: `${writePct ?? 0}%` }}
               />
             </div>
           </div>
@@ -394,18 +430,48 @@ export function CsvImporter() {
         </p>
       )}
 
-      <div
-        onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-        onDragLeave={() => setIsDragOver(false)}
-        onDrop={handleDrop}
-        onClick={() => fileRef.current?.click()}
-        className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-12 cursor-pointer transition-colors ${
-          isDragOver ? "border-zinc-400 bg-zinc-50" : "border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50/50"
-        }`}
-      >
-        <p className="text-sm font-medium">Drop CSV here or click to browse</p>
-        <p className="text-xs text-muted-foreground mt-1">Sheet 1 or Sheet 2 — auto-detected</p>
-      </div>
+      {parseProgress ? (
+        /* Parsing overlay — replaces the drop zone while Sheet2 CSV is being parsed */
+        <div className="flex flex-col items-center gap-4 rounded-lg border-2 border-dashed border-zinc-200 py-12">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600" />
+          <div className="w-full max-w-sm space-y-2 px-4">
+            {parseProgress.total > 0 ? (
+              <>
+                <p className="text-sm text-center text-muted-foreground">
+                  Parsing row {parseProgress.parsed.toLocaleString()} of{" "}
+                  {parseProgress.total.toLocaleString()}
+                  <span className="ml-1 text-zinc-500">
+                    ({Math.round((parseProgress.parsed / parseProgress.total) * 100)}%)
+                  </span>
+                </p>
+                <div className="h-2 w-full rounded-full bg-zinc-100 overflow-hidden">
+                  <div
+                    className="h-full bg-zinc-700 rounded-full transition-all duration-150"
+                    style={{
+                      width: `${Math.round((parseProgress.parsed / parseProgress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-center text-muted-foreground">Reading file…</p>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div
+          onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={handleDrop}
+          onClick={() => fileRef.current?.click()}
+          className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-12 cursor-pointer transition-colors ${
+            isDragOver ? "border-zinc-400 bg-zinc-50" : "border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50/50"
+          }`}
+        >
+          <p className="text-sm font-medium">Drop CSV here or click to browse</p>
+          <p className="text-xs text-muted-foreground mt-1">Sheet 1 or Sheet 2 — auto-detected</p>
+        </div>
+      )}
 
       <input
         ref={fileRef}

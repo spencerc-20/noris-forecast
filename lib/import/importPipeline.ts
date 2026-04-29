@@ -8,6 +8,7 @@ import { ref, update, push } from "firebase/database";
 import { db } from "@/lib/firebase/client";
 import { parseCsv } from "./csvParser";
 import { parseSheet2 } from "./sheet2Parser";
+import type { CustomerProductSummary } from "./sheet2Parser";
 import { validateRows } from "./csvValidator";
 import { getCustomersForUser, createCustomer, updateCustomer } from "@/lib/firebase/customers";
 import { saveImportBatch } from "@/lib/firebase/imports";
@@ -229,72 +230,82 @@ export interface Sheet2RunResult {
 }
 
 /**
- * Sheet2 import: product family breakdown → update customer profiles.
- * Profiles never demote (uses higherProfile). Only updates existing customers in the system.
+ * Sheet2 import: product family breakdown → update customer profiles (single rep).
+ * Profiles never demote (uses higherProfile). Only updates existing customers.
+ *
+ * Pass `preloadedSummaries` (from the async preview parse) to skip re-parsing.
  */
 export async function runSheet2Import(
   csvText: string,
   filename: string,
   ownerId: string,
-  adminUserId: string
+  adminUserId: string,
+  preloadedSummaries?: CustomerProductSummary[]
 ): Promise<Sheet2RunResult> {
-  const summaries = parseSheet2(csvText);
+  const summaries = preloadedSummaries ?? parseSheet2(csvText);
+  const now = Date.now();
 
   const existingCustomers = await getCustomersForUser(ownerId);
   const byNameLower = new Map<string, Customer>(
     existingCustomers.map((c) => [c.name.toLowerCase(), c])
   );
 
-  let updated = 0;
+  // Build pending write list
+  interface PendingS2 {
+    customerId: string;
+    newProfile: string;
+    newProcedureProfile: string;
+    productFamilyBreakdown: Record<string, { qty: number; sales: number }>;
+  }
+  const pending: PendingS2[] = [];
   let skipped = 0;
 
   for (const summary of summaries) {
-    // Try exact match first, then strip practice suffix
     const nameLower = summary.customerName.toLowerCase();
     const existing =
       byNameLower.get(nameLower) ??
-      // Fallback: try matching just the portion before " - "
       byNameLower.get(nameLower.split(" - ")[0].trim());
 
-    if (!existing) {
-      skipped++;
-      continue;
-    }
+    if (!existing) { skipped++; continue; }
 
-    // Never demote — take the highest of deal-based profile and Sheet2-derived profile
     const newProfile = higherProfile(summary.profile, existing.profile);
-    // procedureProfile tracks the Sheet2-derived profile independently (never demotes)
     const newProcedureProfile = higherProfile(
       summary.profile,
       existing.procedureProfile ?? "new"
     );
+    pending.push({
+      customerId: existing.id,
+      newProfile,
+      newProcedureProfile,
+      productFamilyBreakdown: summary.productFamilyBreakdown,
+    });
+  }
 
-    await updateCustomer(
-      existing.id,
-      {
-        profile: newProfile,
-        profileUpdatedAt: Date.now(),
-        productFamilyBreakdown: summary.productFamilyBreakdown,
-        procedureProfile: newProcedureProfile,
-      },
-      adminUserId,
-      existing
-    );
-    updated++;
+  // Batch writes — one multi-path update per BULK_BATCH_SIZE customers
+  for (let i = 0; i < pending.length; i += BULK_BATCH_SIZE) {
+    const chunk = pending.slice(i, i + BULK_BATCH_SIZE);
+    const multiPath: Record<string, unknown> = {};
+    for (const p of chunk) {
+      multiPath[`customers/${p.customerId}/profile`] = p.newProfile;
+      multiPath[`customers/${p.customerId}/profileUpdatedAt`] = now;
+      multiPath[`customers/${p.customerId}/productFamilyBreakdown`] = p.productFamilyBreakdown;
+      multiPath[`customers/${p.customerId}/procedureProfile`] = p.newProcedureProfile;
+    }
+    await update(ref(db, DB_ROOT), multiPath);
   }
 
   const batch = await saveImportBatch({
-    importedAt: Date.now(),
+    importedAt: now,
     importedBy: adminUserId,
     filename,
     rowCount: summaries.length,
-    successCount: updated,
+    successCount: pending.length,
     errorCount: skipped,
     errors: [],
     columnMapping: { Customer: "customerName", "Product Family": "profile" },
   });
 
-  return { updated, skipped, batch };
+  return { updated: pending.length, skipped, batch };
 }
 
 // ---------------------------------------------------------------------------
@@ -576,20 +587,33 @@ export async function runBulkImport(
 }
 
 /**
- * Sheet2 bulk import: auto-assigns profile updates by territory-derived state→rep map.
- * Ambiguous states (VA, CA, TX) are skipped.
+ * Sheet2 bulk import — two-phase approach (mirrors runBulkImport):
+ *
+ * Phase 1 (reads): match each summary against existing customers per rep.
+ *   Builds a flat list of pending writes — no Firebase writes yet.
+ *
+ * Phase 2 (writes): flush in BULK_BATCH_SIZE multi-path update() calls.
+ *   ~44 round-trips for 2 188 customers vs ~11 000 sequential writes before.
+ *   Calls onProgress(written, total) after every batch.
+ *
+ * Pass `preloadedSummaries` (from the async preview parse) to skip re-parsing.
+ * Ambiguous states (VA, CA, TX) are silently skipped — shown in preview.
  */
 export async function runBulkSheet2Import(
   csvText: string,
   filename: string,
-  adminUserId: string
+  adminUserId: string,
+  onProgress?: (done: number, total: number) => void,
+  preloadedSummaries?: CustomerProductSummary[]
 ): Promise<{ updated: number; skipped: number }> {
-  const summaries = parseSheet2(csvText);
+  const summaries = preloadedSummaries ?? parseSheet2(csvText);
+  const now = Date.now();
+
   const territories = await getTerritories();
   const { stateToRep } = buildStateToRepMap(territories);
 
   // Group summaries by repId via state
-  const byRep: Record<string, typeof summaries> = {};
+  const byRep: Record<string, CustomerProductSummary[]> = {};
   for (const s of summaries) {
     const repId = stateToRep[s.state];
     if (!repId) continue;
@@ -597,7 +621,16 @@ export async function runBulkSheet2Import(
     byRep[repId].push(s);
   }
 
-  let updated = 0;
+  // ── Phase 1: build pending write list (reads only) ────────────────────────
+
+  interface PendingS2 {
+    customerId: string;
+    newProfile: string;
+    newProcedureProfile: string;
+    productFamilyBreakdown: Record<string, { qty: number; sales: number }>;
+  }
+
+  const pending: PendingS2[] = [];
   let skipped = 0;
 
   for (const [repId, repSummaries] of Object.entries(byRep)) {
@@ -608,42 +641,57 @@ export async function runBulkSheet2Import(
 
     for (const summary of repSummaries) {
       const nameLower = summary.customerName.toLowerCase();
-      const existing = byNameLower.get(nameLower) ?? byNameLower.get(nameLower.split(" - ")[0].trim());
+      const existing =
+        byNameLower.get(nameLower) ??
+        byNameLower.get(nameLower.split(" - ")[0].trim());
       if (!existing) { skipped++; continue; }
 
-      // Never demote — highest of deal-based profile and Sheet2-derived profile
       const newProfile = higherProfile(summary.profile, existing.profile);
-      // procedureProfile tracks the Sheet2-derived profile independently (never demotes)
       const newProcedureProfile = higherProfile(
         summary.profile,
         existing.procedureProfile ?? "new"
       );
-
-      await updateCustomer(
-        existing.id,
-        {
-          profile: newProfile,
-          profileUpdatedAt: Date.now(),
-          productFamilyBreakdown: summary.productFamilyBreakdown,
-          procedureProfile: newProcedureProfile,
-        },
-        adminUserId,
-        existing
-      );
-      updated++;
+      pending.push({
+        customerId: existing.id,
+        newProfile,
+        newProcedureProfile,
+        productFamilyBreakdown: summary.productFamilyBreakdown,
+      });
     }
   }
 
+  // ── Phase 2: write in batches of BULK_BATCH_SIZE ──────────────────────────
+
+  const total = pending.length;
+  let written = 0;
+
+  for (let i = 0; i < pending.length; i += BULK_BATCH_SIZE) {
+    const chunk = pending.slice(i, i + BULK_BATCH_SIZE);
+    const multiPath: Record<string, unknown> = {};
+
+    for (const p of chunk) {
+      // Four field paths per customer — no logEdit (import batch is the audit trail)
+      multiPath[`customers/${p.customerId}/profile`] = p.newProfile;
+      multiPath[`customers/${p.customerId}/profileUpdatedAt`] = now;
+      multiPath[`customers/${p.customerId}/productFamilyBreakdown`] = p.productFamilyBreakdown;
+      multiPath[`customers/${p.customerId}/procedureProfile`] = p.newProcedureProfile;
+    }
+
+    await update(ref(db, DB_ROOT), multiPath);
+    written += chunk.length;
+    onProgress?.(written, total);
+  }
+
   await saveImportBatch({
-    importedAt: Date.now(),
+    importedAt: now,
     importedBy: adminUserId,
     filename: `[BULK] ${filename}`,
     rowCount: summaries.length,
-    successCount: updated,
+    successCount: written,
     errorCount: skipped,
     errors: [],
     columnMapping: { Customer: "customerName", "Product Family": "profile" },
   });
 
-  return { updated, skipped };
+  return { updated: written, skipped };
 }
