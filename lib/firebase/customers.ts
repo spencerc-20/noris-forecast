@@ -78,6 +78,39 @@ export function subscribeToUserCustomers(
   return unsub;
 }
 
+/**
+ * One-shot read of ALL customers across all reps.
+ * Used by admin / manager / VP roles.
+ */
+export async function getAllCustomers(): Promise<Customer[]> {
+  const snap = await get(ref(db, CUSTOMERS_PATH));
+  if (!snap.exists()) return [];
+  const customers: Customer[] = [];
+  snap.forEach((child) => {
+    customers.push({ id: child.key!, ...child.val() } as Customer);
+  });
+  return customers;
+}
+
+/**
+ * Real-time subscription to ALL customers across all reps.
+ * Used by admin / manager / VP roles. No ownerId filter — reads the full node.
+ */
+export function subscribeToAllCustomers(
+  callback: (customers: Customer[]) => void
+): () => void {
+  const unsub = onValue(ref(db, CUSTOMERS_PATH), (snap) => {
+    const customers: Customer[] = [];
+    if (snap.exists()) {
+      snap.forEach((child) => {
+        customers.push({ id: child.key!, ...child.val() } as Customer);
+      });
+    }
+    callback(customers);
+  });
+  return unsub;
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------

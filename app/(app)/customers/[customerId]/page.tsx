@@ -17,12 +17,14 @@ import { UnifiedStatusBadge } from "@/components/customers/UnifiedStatusBadge";
 import { CustomerProfileBadge } from "@/components/customers/CustomerProfileBadge";
 import { LeadTemperatureBadge } from "@/components/customers/LeadTemperatureBadge";
 import { EditHistoryPanel } from "@/components/shared/EditHistoryPanel";
+import { ContactLinks } from "@/components/shared/ContactLinks";
+import { CustomerSalesContext } from "@/components/customers/CustomerSalesContext";
+import { AnnualRevenueChart } from "@/components/customers/AnnualRevenueChart";
 import { TierPill } from "@/components/forecast/TierPill";
 import { StagePill } from "@/components/shared/StagePill";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -271,6 +273,11 @@ export default function CustomerDetailPage({
               onChange={(e) => updateLocal("email", e.target.value)}
             />
           </div>
+          {(local.phone || local.email) && (
+            <div className="col-span-2 pt-1">
+              <ContactLinks phone={local.phone} email={local.email} />
+            </div>
+          )}
         </div>
 
         {/* Address + state + region */}
@@ -370,44 +377,13 @@ export default function CustomerDetailPage({
         )}
 
         {/* Sales context */}
-        <div className="p-4 space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="currentSystems">Current systems</Label>
-            <Input
-              id="currentSystems"
-              placeholder="e.g. Straumann, Nobel Biocare"
-              value={local.currentSystems}
-              onChange={(e) => updateLocal("currentSystems", e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="norisUse">Noris implant use</Label>
-            <Input
-              id="norisUse"
-              placeholder="e.g. Full arch cases only"
-              value={local.norisImplantUse}
-              onChange={(e) => updateLocal("norisImplantUse", e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="painPoint">Primary pain point</Label>
-            <Input
-              id="painPoint"
-              placeholder="e.g. Cost of zygo kits"
-              value={local.primaryPainPoint}
-              onChange={(e) => updateLocal("primaryPainPoint", e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="custNotes">Notes</Label>
-            <Textarea
-              id="custNotes"
-              rows={3}
-              value={local.notes}
-              onChange={(e) => updateLocal("notes", e.target.value)}
-            />
-          </div>
-        </div>
+        <CustomerSalesContext
+          currentSystems={local.currentSystems}
+          norisImplantUse={local.norisImplantUse}
+          primaryPainPoint={local.primaryPainPoint}
+          notes={local.notes}
+          onChange={(field, value) => updateLocal(field, value)}
+        />
 
         {/* Computed fields — read only */}
         <div className="p-4 space-y-2">
@@ -446,26 +422,11 @@ export default function CustomerDetailPage({
 
         {/* Revenue history */}
         {Object.keys(customer.annualRevenue ?? {}).length > 0 && (
-          <div className="p-4 space-y-2">
+          <div className="p-4 space-y-3">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
               Annual revenue (from import)
             </p>
-            <div className="flex gap-4 flex-wrap text-sm">
-              {Object.entries(customer.annualRevenue)
-                .sort(([a], [b]) => Number(b) - Number(a))
-                .map(([year, amount]) => (
-                  <div key={year} className="text-center">
-                    <p className="text-xs text-muted-foreground">{year}</p>
-                    <p className="font-medium tabular-nums">
-                      {new Intl.NumberFormat("en-US", {
-                        style: "currency",
-                        currency: "USD",
-                        minimumFractionDigits: 0,
-                      }).format(amount)}
-                    </p>
-                  </div>
-                ))}
-            </div>
+            <AnnualRevenueChart annualRevenue={customer.annualRevenue} />
           </div>
         )}
       </div>
