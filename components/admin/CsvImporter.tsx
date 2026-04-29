@@ -71,6 +71,7 @@ export function CsvImporter() {
   const [repsLoaded, setRepsLoaded] = useState(false);
   const [runError, setRunError] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
+  const [progress, setProgress] = useState<{ written: number; total: number } | null>(null);
 
   async function loadReps(): Promise<AppUser[]> {
     if (repsLoaded) return reps;
@@ -150,6 +151,7 @@ export function CsvImporter() {
 
     setStep("running");
     setRunError("");
+    setProgress(null);
 
     try {
       if (mode === "bulk") {
@@ -157,7 +159,12 @@ export function CsvImporter() {
           const result = await runBulkSheet2Import(preview.csvText, preview.filename, appUser.id);
           setDone({ updated: result.updated, skipped: result.skipped, errorCount: 0, format: "sheet2", mode: "bulk" });
         } else {
-          const result = await runBulkImport(preview.csvText, preview.filename, appUser.id);
+          const result = await runBulkImport(
+            preview.csvText,
+            preview.filename,
+            appUser.id,
+            (written, total) => setProgress({ written, total })
+          );
           setDone({ created: result.totalCreated, updated: result.totalUpdated, errorCount: result.totalErrors, format: preview.format, mode: "bulk" });
         }
       } else {
@@ -182,6 +189,7 @@ export function CsvImporter() {
     setDone(null);
     setRunError("");
     setTargetRep(null);
+    setProgress(null);
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -209,10 +217,32 @@ export function CsvImporter() {
 
   // ── Running ───────────────────────────────────────────────────────────────
   if (step === "running") {
+    const pct = progress && progress.total > 0
+      ? Math.round((progress.written / progress.total) * 100)
+      : null;
+
     return (
-      <div className="flex flex-col items-center gap-3 py-12">
+      <div className="flex flex-col items-center gap-4 py-12">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600" />
-        <p className="text-sm text-muted-foreground">Importing… this may take a minute for large files.</p>
+
+        {progress ? (
+          <div className="w-full max-w-sm space-y-2">
+            <p className="text-sm text-center text-muted-foreground">
+              Writing {progress.written.toLocaleString()} / {progress.total.toLocaleString()}
+              {pct !== null && <span className="ml-1 text-zinc-500">({pct}%)</span>}
+            </p>
+            <div className="h-2 w-full rounded-full bg-zinc-100 overflow-hidden">
+              <div
+                className="h-full bg-zinc-700 rounded-full transition-all duration-200"
+                style={{ width: `${pct ?? 0}%` }}
+              />
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Preparing records… this may take a moment.
+          </p>
+        )}
       </div>
     );
   }
