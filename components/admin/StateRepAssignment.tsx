@@ -118,7 +118,7 @@ export function StateRepAssignment() {
         region: editForm.region,
         repId: editForm.repId || null,
         stateCode: editForm.stateCode.trim().toUpperCase() || undefined,
-        notes: editForm.notes.trim() || undefined,
+        notes: editForm.notes.trim() || "",
       };
       await updateTerritory(id, updates);
       setEditingId(null);
@@ -163,7 +163,7 @@ export function StateRepAssignment() {
         region: addForm.region,
         repId: addForm.repId || null,
         stateCode: addForm.stateCode.trim().toUpperCase() || undefined,
-        notes: addForm.notes.trim() || undefined,
+        notes: addForm.notes.trim() || "",
       });
       setShowAdd(false);
       setAddForm(BLANK_FORM);
