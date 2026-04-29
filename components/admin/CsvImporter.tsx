@@ -74,11 +74,12 @@ export function CsvImporter() {
 
   async function loadReps(): Promise<AppUser[]> {
     if (repsLoaded) return reps;
+    // Load ALL non-disabled users so repNameMap resolves player-coach UIDs (managers
+    // like Eileen and Nick can be territory reps). Single-rep picker shows everyone too.
     const all = await getAllUsers();
-    const repList = all.filter((u) => u.role === "rep");
-    setReps(repList);
+    setReps(all);
     setRepsLoaded(true);
-    return repList;
+    return all;
   }
 
   async function handleFile(file: File) {

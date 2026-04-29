@@ -63,13 +63,13 @@ export function validateRows(rows: ImportRow[]): ValidationResult {
       invalidRowIndices.add(row.rowIndex);
     }
 
-    // Revenue values must be non-negative
+    // Revenue values must be finite numbers (negatives allowed — represent credits/returns)
     for (const [yearStr, value] of Object.entries(row.annualRevenue)) {
-      if (typeof value !== "number" || isNaN(value) || value < 0) {
+      if (typeof value !== "number" || !isFinite(value)) {
         errors.push({
           rowIndex: row.rowIndex,
           field: `revenue_${yearStr}`,
-          message: `Revenue for ${yearStr} must be a non-negative number`,
+          message: `Revenue for ${yearStr} must be a finite number`,
           rawValue: String(value),
         });
         invalidRowIndices.add(row.rowIndex);
