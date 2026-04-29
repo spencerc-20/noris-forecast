@@ -6,7 +6,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow, parseISO } from "date-fns";
-import type { Customer, LeadTemperature, LifecycleStatus } from "@/types";
+import type { Customer, CustomerProfile, LeadTemperature, LifecycleStatus } from "@/types";
 import { UnifiedStatusBadge } from "./UnifiedStatusBadge";
 import { CustomerProfileBadge } from "./CustomerProfileBadge";
 import { LeadTemperatureBadge } from "./LeadTemperatureBadge";
@@ -19,6 +19,16 @@ const LIFECYCLE_OPTIONS: LifecycleStatus[] = [
 ];
 const TEMP_OPTIONS: LeadTemperature[] = ["cold", "warm", "hot", "engaged"];
 
+// Procedure profiles from Sheet2 import (excludes "new" which means no Sheet2 data)
+const PROFILE_OPTIONS: { value: CustomerProfile; label: string }[] = [
+  { value: "everything",  label: "Everything"  },
+  { value: "full_arch",   label: "Full arch"   },
+  { value: "ra_only",     label: "RA only"     },
+  { value: "standard",    label: "Standard"    },
+  { value: "course_only", label: "Course only" },
+  { value: "tools_only",  label: "Tools only"  },
+];
+
 interface CustomerListProps {
   customers: Customer[];
 }
@@ -28,6 +38,7 @@ export function CustomerList({ customers }: CustomerListProps) {
   const [search, setSearch] = useState("");
   const [filterLifecycle, setFilterLifecycle] = useState<LifecycleStatus | null>(null);
   const [filterTemp, setFilterTemp] = useState<LeadTemperature | null>(null);
+  const [filterProfile, setFilterProfile] = useState<CustomerProfile | null>(null);
 
   const filtered = useMemo(() => {
     let result = customers;
@@ -45,8 +56,11 @@ export function CustomerList({ customers }: CustomerListProps) {
     if (filterTemp) {
       result = result.filter((c) => c.leadTemperature === filterTemp);
     }
+    if (filterProfile) {
+      result = result.filter((c) => c.procedureProfile === filterProfile);
+    }
     return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [customers, search, filterLifecycle, filterTemp]);
+  }, [customers, search, filterLifecycle, filterTemp, filterProfile]);
 
   return (
     <div className="space-y-3">
@@ -85,6 +99,21 @@ export function CustomerList({ customers }: CustomerListProps) {
               }`}
             >
               {t}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1 flex-wrap">
+          {PROFILE_OPTIONS.map(({ value, label }) => (
+            <button
+              key={value}
+              onClick={() => setFilterProfile(filterProfile === value ? null : value)}
+              className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                filterProfile === value
+                  ? "bg-zinc-800 text-white border-zinc-800"
+                  : "border-zinc-200 text-muted-foreground hover:border-zinc-400"
+              }`}
+            >
+              {label}
             </button>
           ))}
         </div>

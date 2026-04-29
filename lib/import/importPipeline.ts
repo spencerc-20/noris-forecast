@@ -261,12 +261,22 @@ export async function runSheet2Import(
       continue;
     }
 
+    // Never demote — take the highest of deal-based profile and Sheet2-derived profile
     const newProfile = higherProfile(summary.profile, existing.profile);
-    if (newProfile === existing.profile) continue;
+    // procedureProfile tracks the Sheet2-derived profile independently (never demotes)
+    const newProcedureProfile = higherProfile(
+      summary.profile,
+      existing.procedureProfile ?? "new"
+    );
 
     await updateCustomer(
       existing.id,
-      { profile: newProfile, profileUpdatedAt: Date.now() },
+      {
+        profile: newProfile,
+        profileUpdatedAt: Date.now(),
+        productFamilyBreakdown: summary.productFamilyBreakdown,
+        procedureProfile: newProcedureProfile,
+      },
       adminUserId,
       existing
     );
@@ -601,10 +611,25 @@ export async function runBulkSheet2Import(
       const existing = byNameLower.get(nameLower) ?? byNameLower.get(nameLower.split(" - ")[0].trim());
       if (!existing) { skipped++; continue; }
 
+      // Never demote — highest of deal-based profile and Sheet2-derived profile
       const newProfile = higherProfile(summary.profile, existing.profile);
-      if (newProfile === existing.profile) continue;
+      // procedureProfile tracks the Sheet2-derived profile independently (never demotes)
+      const newProcedureProfile = higherProfile(
+        summary.profile,
+        existing.procedureProfile ?? "new"
+      );
 
-      await updateCustomer(existing.id, { profile: newProfile, profileUpdatedAt: Date.now() }, adminUserId, existing);
+      await updateCustomer(
+        existing.id,
+        {
+          profile: newProfile,
+          profileUpdatedAt: Date.now(),
+          productFamilyBreakdown: summary.productFamilyBreakdown,
+          procedureProfile: newProcedureProfile,
+        },
+        adminUserId,
+        existing
+      );
       updated++;
     }
   }

@@ -31,6 +31,12 @@ export interface Customer {
   profile: CustomerProfile;
   profileUpdatedAt: number | null; // Unix timestamp ms
 
+  // Sheet2-derived fields (populated by product-family CSV import)
+  /** Per-family obligo totals from Sheet2: { "Zygomatic Implant": { qty: 2, sales: 14000 }, ... } */
+  productFamilyBreakdown?: { [family: string]: { qty: number; sales: number } };
+  /** Highest procedure profile tier from Sheet2 product history. Never demotes. */
+  procedureProfile?: CustomerProfile;
+
   // Ownership
   ownerId: string;
   region: string; // auto-set from state via STATE_TO_REGION; rep can override
