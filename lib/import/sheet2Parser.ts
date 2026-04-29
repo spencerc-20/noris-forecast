@@ -53,8 +53,29 @@ const TOOLS_ONLY_FAMILIES = new Set([
   "default part family",
 ]);
 
+/**
+ * Sanitize a product family name for use as a Firebase Realtime Database key.
+ * Firebase forbids: . # $ [ ] and / (path separator).
+ * Strategy: / → hyphen, everything else forbidden + spaces → underscore.
+ * Example: "MBI N/C Implant" → "MBI_N-C_Implant"
+ */
+function sanitizeFamilyKey(name: string): string {
+  return name
+    .replace(/\//g, "-")         // path separator → hyphen (preserves readability)
+    .replace(/[.#$[\] ]/g, "_"); // . # $ [ ] and spaces → underscore
+}
+
+/**
+ * Normalize a (possibly sanitized) family key for set-membership lookups.
+ * Converts underscores and hyphens back to spaces so sanitized keys still
+ * match the ZYGO_FAMILIES / FULL_ARCH_FAMILIES / etc. sets.
+ */
 function normalizeFamily(raw: string): string {
-  return raw.toLowerCase().replace(/\s+/g, " ").trim();
+  return raw
+    .toLowerCase()
+    .replace(/[_-]/g, " ") // reverse sanitization: _ and - → space
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** Derive a CustomerProfile from per-family qty+sales breakdown (obligo only). */
@@ -153,15 +174,18 @@ export function parseSheet2(csvText: string): CustomerProductSummary[] {
     const obligoCredit = (row["Obligo/Credit"] ?? "").toLowerCase().trim();
     if (obligoCredit === "credit") continue;
 
-    // Accumulate qty + sales per family (raw family name as key for readability)
+    // Accumulate qty + sales per family.
+    // Key is sanitized for Firebase (no . # $ [ ] /); normalizeFamily() reverses
+    // sanitization so deriveProfile() still matches the known family sets.
+    const familyKey = sanitizeFamilyKey(rawFamily);
     const qty = parseCellNumber(row["Qty"]);
     const sales = parseCellNumber(row["Sales $"]);
 
-    if (!current.productFamilyBreakdown[rawFamily]) {
-      current.productFamilyBreakdown[rawFamily] = { qty: 0, sales: 0 };
+    if (!current.productFamilyBreakdown[familyKey]) {
+      current.productFamilyBreakdown[familyKey] = { qty: 0, sales: 0 };
     }
-    current.productFamilyBreakdown[rawFamily].qty += qty;
-    current.productFamilyBreakdown[rawFamily].sales += sales;
+    current.productFamilyBreakdown[familyKey].qty += qty;
+    current.productFamilyBreakdown[familyKey].sales += sales;
   }
 
   if (current) summaries.push(current);
