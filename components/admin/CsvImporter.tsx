@@ -249,9 +249,15 @@ export function CsvImporter() {
                   <span className="tabular-nums text-muted-foreground">{rowCount} customers</span>
                 </div>
               ))}
+            {preview.bulkPreview.ambiguousStates && preview.bulkPreview.ambiguousStates.length > 0 && (
+              <p className="text-xs text-orange-700 mt-1">
+                Ambiguous — multiple reps or open slots (assign manually):{" "}
+                {preview.bulkPreview.ambiguousStates.join(", ")}
+              </p>
+            )}
             {preview.bulkPreview.unmappedStates.length > 0 && (
               <p className="text-xs text-amber-700 mt-1">
-                Skipped — no rep assigned for states:{" "}
+                Skipped — no territory configured for states:{" "}
                 {preview.bulkPreview.unmappedStates.join(", ")}
               </p>
             )}
@@ -317,9 +323,9 @@ export function CsvImporter() {
           </Button>
           <Button variant="outline" onClick={reset}>Cancel</Button>
         </div>
-        {mode === "bulk" && preview.bulkPreview?.unmappedStates && preview.bulkPreview.unmappedStates.length > 0 && (
+        {mode === "bulk" && (((preview.bulkPreview?.unmappedStates?.length ?? 0) > 0) || ((preview.bulkPreview?.ambiguousStates?.length ?? 0) > 0)) && (
           <p className="text-xs text-muted-foreground">
-            Set state assignments in the <strong>Territory Map</strong> tab before importing to avoid skipped rows.
+            Skipped rows can be imported manually via <strong>Single rep</strong> mode after configuring the <strong>Territory Map</strong>.
           </p>
         )}
       </div>

@@ -9,8 +9,9 @@ import { parseSheet2 } from "./sheet2Parser";
 import { validateRows } from "./csvValidator";
 import { getCustomersForUser, createCustomer, updateCustomer } from "@/lib/firebase/customers";
 import { saveImportBatch } from "@/lib/firebase/imports";
-import { getStateToRepMap } from "@/lib/firebase/config";
+import { getTerritories } from "@/lib/firebase/config";
 import { regionForState } from "@/lib/forecast/regionConfig";
+import type { TerritoryEntry } from "@/types";
 import { computeCommissionStatus } from "@/lib/forecast/commissionStatus";
 import { higherProfile } from "@/lib/forecast/customerProfile";
 import type { Customer, ImportBatch, ImportError, LifecycleStatus } from "@/types";
@@ -19,6 +20,44 @@ export interface ImportRunResult {
   batch: ImportBatch;
   created: number;
   updated: number;
+}
+
+/**
+ * Derives a state→repId map from territories for bulk import.
+ * A state is "clean" if there is exactly one distinct non-null repId AND no open (null) entries.
+ * All other states are flagged as ambiguous and excluded from auto-assignment.
+ */
+function buildStateToRepMap(territories: TerritoryEntry[]): {
+  stateToRep: Record<string, string>;
+  ambiguousStates: string[];
+} {
+  // Group by stateCode
+  const byState: Record<string, TerritoryEntry[]> = {};
+  for (const t of territories) {
+    if (!t.stateCode) continue;
+    const sc = t.stateCode.toUpperCase();
+    if (!byState[sc]) byState[sc] = [];
+    byState[sc].push(t);
+  }
+
+  const stateToRep: Record<string, string> = {};
+  const ambiguousStates: string[] = [];
+
+  for (const [state, entries] of Object.entries(byState)) {
+    const nonNullIds = [...new Set(entries.filter((e) => e.repId).map((e) => e.repId!))];
+    const hasOpen = entries.some((e) => !e.repId);
+
+    if (nonNullIds.length === 1 && !hasOpen) {
+      // Exactly one rep, no open slots → clean assignment
+      stateToRep[state] = nonNullIds[0];
+    } else if (nonNullIds.length > 0 || hasOpen) {
+      // Multiple reps OR mixed non-null + open → needs manual assignment
+      ambiguousStates.push(state);
+    }
+    // If nonNullIds.length === 0 && !hasOpen: no territories for this state → unmapped
+  }
+
+  return { stateToRep, ambiguousStates: ambiguousStates.sort() };
 }
 
 /**
@@ -252,9 +291,10 @@ export interface BulkRepSummary {
 export interface BulkPreview {
   totalRows: number;
   validRows: number;
-  skippedRows: number; // validation errors + unmapped states
+  skippedRows: number;       // validation errors + unmapped + ambiguous states
   repBreakdown: BulkRepSummary[];
-  unmappedStates: string[]; // states with no rep assigned
+  unmappedStates: string[];  // states that have no territory entries at all
+  ambiguousStates: string[]; // states with multiple reps or open slots — needs manual assignment
 }
 
 /**
@@ -263,13 +303,16 @@ export interface BulkPreview {
 export async function previewBulkImport(csvText: string): Promise<BulkPreview> {
   const { rows } = parseCsv(csvText);
   const { validRows, invalidRowIndices } = await Promise.resolve(validateRows(rows));
-  const stateToRep = await getStateToRepMap();
+  const territories = await getTerritories();
+  const { stateToRep, ambiguousStates } = buildStateToRepMap(territories);
 
   const repCounts: Record<string, number> = {};
   const unmappedStates = new Set<string>();
+  const ambiguousSet = new Set(ambiguousStates);
 
   for (const row of validRows) {
     const state = row.state.toUpperCase();
+    if (ambiguousSet.has(state)) continue; // flagged ambiguous — excluded from auto-assign
     const repId = stateToRep[state];
     if (!repId) {
       unmappedStates.add(state);
@@ -278,12 +321,15 @@ export async function previewBulkImport(csvText: string): Promise<BulkPreview> {
     }
   }
 
+  const skipped = invalidRowIndices.size + unmappedStates.size + ambiguousSet.size;
+
   return {
     totalRows: rows.length,
     validRows: validRows.length,
-    skippedRows: invalidRowIndices.size + unmappedStates.size,
+    skippedRows: skipped,
     repBreakdown: Object.entries(repCounts).map(([repId, rowCount]) => ({ repId, rowCount })),
     unmappedStates: [...unmappedStates].sort(),
+    ambiguousStates,
   };
 }
 
@@ -295,7 +341,8 @@ export interface BulkImportResult {
 }
 
 /**
- * Sheet1 bulk import: reads stateToRepMap, distributes rows to their rep, runs import per rep.
+ * Sheet1 bulk import: reads territory map, distributes rows to their rep, runs import per rep.
+ * Ambiguous states (multi-rep or mixed open/assigned) are skipped — admins assign manually.
  */
 export async function runBulkImport(
   csvText: string,
@@ -305,7 +352,8 @@ export async function runBulkImport(
   const currentYear = new Date().getFullYear();
   const { rows, columnMapping } = parseCsv(csvText);
   const { validRows, errors: validationErrors } = validateRows(rows);
-  const stateToRep = await getStateToRepMap();
+  const territories = await getTerritories();
+  const { stateToRep } = buildStateToRepMap(territories);
 
   // Group valid rows by repId
   const rowsByRep: Record<string, typeof validRows> = {};
@@ -432,7 +480,8 @@ export async function runBulkImport(
 }
 
 /**
- * Sheet2 bulk import: auto-assigns profile updates by state→repId map.
+ * Sheet2 bulk import: auto-assigns profile updates by territory-derived state→rep map.
+ * Ambiguous states (VA, CA, TX) are skipped.
  */
 export async function runBulkSheet2Import(
   csvText: string,
@@ -440,7 +489,8 @@ export async function runBulkSheet2Import(
   adminUserId: string
 ): Promise<{ updated: number; skipped: number }> {
   const summaries = parseSheet2(csvText);
-  const stateToRep = await getStateToRepMap();
+  const territories = await getTerritories();
+  const { stateToRep } = buildStateToRepMap(territories);
 
   // Group summaries by repId via state
   const byRep: Record<string, typeof summaries> = {};

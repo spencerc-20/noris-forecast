@@ -6,3 +6,4 @@ export * from "./customer";
 export * from "./snapshot";
 export * from "./user";
 export * from "./import";
+export * from "./territory";
