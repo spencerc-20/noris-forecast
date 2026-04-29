@@ -1,13 +1,19 @@
 // components/admin/ConfigEditor.tsx — Read-only reference for all V1 taxonomy values:
 // pipeline stages (with default probabilities), procedure tiers (with hierarchy rank),
 // and deal structures (with forecast-eligibility). V2 will make these editable.
+// Also hosts one-time data maintenance actions.
 
+"use client";
+
+import { useState } from "react";
 import {
   STAGE_DEFAULT_PROBABILITY,
   TIER_RANK,
   FORECAST_ELIGIBLE_STRUCTURES,
 } from "@/types";
 import type { DealStage, ProcedureTier, DealStructure } from "@/types";
+import { migrateExistingCustomerTemperature } from "@/lib/firebase/customers";
+import { Button } from "@/components/ui/button";
 
 // ── Stages ───────────────────────────────────────────────────────────────────
 
@@ -70,6 +76,26 @@ function EligiblePill({ eligible }: { eligible: boolean }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ConfigEditor() {
+  const [migrating, setMigrating] = useState(false);
+  const [migrateResult, setMigrateResult] = useState<string | null>(null);
+
+  async function handleMigrateTemperature() {
+    setMigrating(true);
+    setMigrateResult(null);
+    try {
+      const count = await migrateExistingCustomerTemperature();
+      setMigrateResult(
+        count === 0
+          ? "No customers needed updating."
+          : `Done — updated ${count} customer${count === 1 ? "" : "s"} from cold → warm.`
+      );
+    } catch (err) {
+      setMigrateResult(`Error: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setMigrating(false);
+    }
+  }
+
   return (
     <div className="space-y-8">
       <p className="text-sm text-muted-foreground">
@@ -155,6 +181,35 @@ export function ConfigEditor() {
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* Data maintenance */}
+      <div>
+        <div className="mb-2">
+          <h3 className="text-sm font-semibold">Data maintenance</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            One-time migrations. Safe to re-run — already-correct records are skipped.
+          </p>
+        </div>
+        <div className="rounded-lg border bg-white p-4 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium">Fix legacy cold temperature</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Customers imported before 2026-04-30 with lifecycleStatus&nbsp;=&nbsp;existing
+                were incorrectly set to cold. This migrates them to warm.
+              </p>
+            </div>
+            <Button size="sm" variant="outline" disabled={migrating} onClick={handleMigrateTemperature}>
+              {migrating ? "Running…" : "Run"}
+            </Button>
+          </div>
+          {migrateResult && (
+            <p className={`text-xs ${migrateResult.startsWith("Error") ? "text-red-600" : "text-emerald-600"}`}>
+              {migrateResult}
+            </p>
+          )}
         </div>
       </div>
     </div>

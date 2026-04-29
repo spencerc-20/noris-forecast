@@ -30,6 +30,7 @@ export default function TeamPage() {
   const { appUser } = useAuth();
   const [rows, setRows] = useState<RepRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [timedOut, setTimedOut] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const currentMonth = format(new Date(), "yyyy-MM");
@@ -42,44 +43,54 @@ export default function TeamPage() {
     }
 
     setLoading(true);
-    const reps = await getUsersForRegion(appUser.region);
+    try {
+      const reps = await getUsersForRegion(appUser.region);
 
-    const loaded = await Promise.all(
-      reps.map(async (rep) => {
-        const [deals, snaps] = await Promise.all([
-          getDealsForUser(rep.id),
-          getMonthSnapshots(rep.id, currentMonth),
-        ]);
+      const loaded = await Promise.all(
+        reps.map(async (rep) => {
+          const [deals, snaps] = await Promise.all([
+            getDealsForUser(rep.id),
+            getMonthSnapshots(rep.id, currentMonth),
+          ]);
 
-        const openDeals = deals.filter((d) => d.stage !== "won" && d.stage !== "lost");
-        const currentForecast = forecastTotal(openDeals);
+          const openDeals = deals.filter((d) => d.stage !== "won" && d.stage !== "lost");
+          const currentForecast = forecastTotal(openDeals);
 
-        const monthStart = format(new Date(), "yyyy-MM");
-        const wonThisMonth = deals.filter(
-          (d) =>
-            d.stage === "won" &&
-            d.closedAt !== null &&
-            format(new Date(d.closedAt), "yyyy-MM") === monthStart
-        ).length;
+          const monthStart = format(new Date(), "yyyy-MM");
+          const wonThisMonth = deals.filter(
+            (d) =>
+              d.stage === "won" &&
+              d.closedAt !== null &&
+              format(new Date(d.closedAt), "yyyy-MM") === monthStart
+          ).length;
 
-        return {
-          user: rep,
-          currentForecast,
-          monthStartForecast: snaps["month_start"]?.totalForecast ?? null,
-          openDealCount: openDeals.length,
-          wonThisMonth,
-        } satisfies RepRow;
-      })
-    );
+          return {
+            user: rep,
+            currentForecast,
+            monthStartForecast: snaps["month_start"]?.totalForecast ?? null,
+            openDealCount: openDeals.length,
+            wonThisMonth,
+          } satisfies RepRow;
+        })
+      );
 
-    setRows(loaded.sort((a, b) => b.currentForecast - a.currentForecast));
-    setLastRefreshed(new Date());
-    setLoading(false);
+      setRows(loaded.sort((a, b) => b.currentForecast - a.currentForecast));
+      setLastRefreshed(new Date());
+    } finally {
+      setLoading(false);
+    }
   }, [appUser, currentMonth, router]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // 5-second timeout: stop spinning and show empty state if data never arrives
+  useEffect(() => {
+    if (!loading) { setTimedOut(false); return; }
+    const t = setTimeout(() => setTimedOut(true), 5000);
+    return () => clearTimeout(t);
+  }, [loading]);
 
   if (!appUser) return null;
 
@@ -113,13 +124,13 @@ export default function TeamPage() {
         </Button>
       </div>
 
-      {loading ? (
+      {loading && !timedOut ? (
         <div className="flex justify-center py-16">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600" />
         </div>
       ) : rows.length === 0 ? (
         <div className="rounded-lg border bg-white p-8 text-center text-sm text-muted-foreground">
-          No reps found in region {appUser.region}.
+          No pipeline data yet — reps need to create deals to populate this view.
         </div>
       ) : (
         <div className="rounded-lg border bg-white overflow-hidden">

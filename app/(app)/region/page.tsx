@@ -36,6 +36,7 @@ export default function RegionPage() {
   const { appUser } = useAuth();
   const [regionData, setRegionData] = useState<RegionData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [timedOut, setTimedOut] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
@@ -49,61 +50,71 @@ export default function RegionPage() {
     }
 
     setLoading(true);
-    const byRegion = await getUsersByRegion();
+    try {
+      const byRegion = await getUsersByRegion();
 
-    // Load all rep data in parallel across all regions
-    const allRegions = ALL_REGIONS.filter((r) => byRegion[r]?.length);
+      // Load all rep data in parallel across all regions
+      const allRegions = ALL_REGIONS.filter((r) => byRegion[r]?.length);
 
-    const loaded = await Promise.all(
-      allRegions.map(async (region) => {
-        const reps = byRegion[region] ?? [];
+      const loaded = await Promise.all(
+        allRegions.map(async (region) => {
+          const reps = byRegion[region] ?? [];
 
-        const repRows = await Promise.all(
-          reps.map(async (rep) => {
-            const [deals, snaps] = await Promise.all([
-              getDealsForUser(rep.id),
-              getMonthSnapshots(rep.id, currentMonth),
-            ]);
-            const openDeals = deals.filter((d) => d.stage !== "won" && d.stage !== "lost");
-            return {
-              user: rep,
-              currentForecast: forecastTotal(openDeals),
-              monthStartForecast: snaps["month_start"]?.totalForecast ?? null,
-              openDealCount: openDeals.length,
-            } satisfies RepRow;
-          })
-        );
+          const repRows = await Promise.all(
+            reps.map(async (rep) => {
+              const [deals, snaps] = await Promise.all([
+                getDealsForUser(rep.id),
+                getMonthSnapshots(rep.id, currentMonth),
+              ]);
+              const openDeals = deals.filter((d) => d.stage !== "won" && d.stage !== "lost");
+              return {
+                user: rep,
+                currentForecast: forecastTotal(openDeals),
+                monthStartForecast: snaps["month_start"]?.totalForecast ?? null,
+                openDealCount: openDeals.length,
+              } satisfies RepRow;
+            })
+          );
 
-        repRows.sort((a, b) => b.currentForecast - a.currentForecast);
+          repRows.sort((a, b) => b.currentForecast - a.currentForecast);
 
-        return {
-          region,
-          reps: repRows,
-          totalCurrent: repRows.reduce((s, r) => s + r.currentForecast, 0),
-          totalMonthStart: repRows.reduce(
-            (s, r) => s + (r.monthStartForecast ?? r.currentForecast),
-            0
-          ),
-        } satisfies RegionData;
-      })
-    );
+          return {
+            region,
+            reps: repRows,
+            totalCurrent: repRows.reduce((s, r) => s + r.currentForecast, 0),
+            totalMonthStart: repRows.reduce(
+              (s, r) => s + (r.monthStartForecast ?? r.currentForecast),
+              0
+            ),
+          } satisfies RegionData;
+        })
+      );
 
-    // Sort regions by total current forecast descending
-    loaded.sort((a, b) => b.totalCurrent - a.totalCurrent);
-    setRegionData(loaded);
+      // Sort regions by total current forecast descending
+      loaded.sort((a, b) => b.totalCurrent - a.totalCurrent);
+      setRegionData(loaded);
 
-    // Expand all regions by default
-    const exp: Record<string, boolean> = {};
-    for (const r of loaded) exp[r.region] = true;
-    setExpanded(exp);
+      // Expand all regions by default
+      const exp: Record<string, boolean> = {};
+      for (const r of loaded) exp[r.region] = true;
+      setExpanded(exp);
 
-    setLastRefreshed(new Date());
-    setLoading(false);
+      setLastRefreshed(new Date());
+    } finally {
+      setLoading(false);
+    }
   }, [appUser, currentMonth, router]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // 5-second timeout: stop spinning and show empty state if data never arrives
+  useEffect(() => {
+    if (!loading) { setTimedOut(false); return; }
+    const t = setTimeout(() => setTimedOut(true), 5000);
+    return () => clearTimeout(t);
+  }, [loading]);
 
   if (!appUser) return null;
 
@@ -138,9 +149,13 @@ export default function RegionPage() {
         </Button>
       </div>
 
-      {loading ? (
+      {loading && !timedOut ? (
         <div className="flex justify-center py-16">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600" />
+        </div>
+      ) : regionData.length === 0 ? (
+        <div className="rounded-lg border bg-white p-8 text-center text-sm text-muted-foreground">
+          No pipeline data yet — reps need to create deals to populate this view.
         </div>
       ) : (
         <>

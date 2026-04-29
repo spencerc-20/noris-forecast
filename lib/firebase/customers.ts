@@ -185,6 +185,31 @@ export async function updateCustomer(
   }
 }
 
+/**
+ * One-time migration: set leadTemperature = 'warm' for every customer whose
+ * lifecycleStatus is 'existing' but whose temperature is still 'cold' (the old
+ * import default). Uses a single multi-path update for efficiency.
+ * Returns the number of customers updated.
+ */
+export async function migrateExistingCustomerTemperature(): Promise<number> {
+  const snap = await get(ref(db, CUSTOMERS_PATH));
+  if (!snap.exists()) return 0;
+
+  const updates: Record<string, string> = {};
+  snap.forEach((child) => {
+    const c = child.val() as Partial<Customer>;
+    if (c.lifecycleStatus === "existing" && c.leadTemperature === "cold") {
+      updates[`${child.key!}/leadTemperature`] = "warm";
+    }
+  });
+
+  const count = Object.keys(updates).length;
+  if (count > 0) {
+    await update(ref(db, CUSTOMERS_PATH), updates);
+  }
+  return count;
+}
+
 /** Hard-delete a customer. Logs before removing. */
 export async function deleteCustomer(
   customerId: string,
