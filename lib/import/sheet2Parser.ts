@@ -5,53 +5,91 @@
 // "Total" rows (Product Family === "Total" or empty) are skipped.
 // Credit rows (Obligo/Credit === "credit") are skipped — only obligo rows counted.
 //
-// Profile derivation from Noris Medical product families (conservative, never over-inflates):
-//   Zygomatic Implant / Zygoma Drills + any full-arch implant → everything
-//   Zygomatic Implant / Zygoma Drills / IMPLANTS PTERYFIT (alone) → ra_only
-//   Multi Unit / Tuff / Tuff TT / UniCon / Mono Bendable → full_arch
-//   Mono Implants / Abutments / Healing Caps / standard implant families → standard
-//   Only tools/instruments/shipping/drills/credits → tools_only
+// Product family groups (qty only — sales ignored for classification):
+//   RA group   : Zygomatic Implant, Zygoma Drills, IMPLANTS PTERYFIT
+//   TUFF group : Tuff, Tuff Pro Implant, Implants Tuff UniCon, Unicon Family
+//   Other impl : MBI Implant, MBI N/C Implant, Mono Bendable, Mono Implants, Multi Unit
+//   Tools/supply: everything else — ignored for profile classification
+//
+// Classification (majority-based, ratio-driven):
+//   everything — TUFF + RA both present, neither a clear majority (raFraction 15%–80%)
+//   full_arch  — TUFF dominant, RA is only a couple (raFraction < 15%)
+//   ra_only    — RA dominant, TUFF is only a handful (raFraction > 80%)
+//   other      — Other implants only, no meaningful TUFF or RA
+//   tools_only — Only tools/supplies, no implants at all
+//   new        — No Sheet2 data
 
 import Papa from "papaparse";
 import type { CustomerProfile } from "@/types";
 
-const ZYGO_FAMILIES = new Set([
+// ── Product family classification sets ────────────────────────────────────────
+// All entries are in normalised form (lowercase, underscores/hyphens → space).
+
+const RA_FAMILIES = new Set([
   "zygomatic implant",
   "zygoma drills",
-  "zygomatic",
-]);
-
-const PTERY_FAMILIES = new Set([
   "implants pteryfit",
-  "pteryfit",
-  "pterygoid",
 ]);
 
-const FULL_ARCH_FAMILIES = new Set([
-  "multi unit",
-  "tuff, tuff tt",
+const TUFF_FAMILIES = new Set([
   "tuff",
+  "tuff pro implant",
   "implants tuff unicon",
   "unicon family",
+]);
+
+const OTHER_IMPLANT_FAMILIES = new Set([
+  "mbi implant",
+  "mbi n c implant",   // "MBI N/C Implant" → sanitised "MBI_N-C_Implant" → normalised "mbi n c implant"
   "mono bendable",
-]);
-
-const STANDARD_FAMILIES = new Set([
   "mono implants",
-  "abutments",
-  "healing caps",
-  "transfers, ball attachments, ana",
-  "dummy implants",
-  "implants",
+  "multi unit",
 ]);
 
-const TOOLS_ONLY_FAMILIES = new Set([
-  "tools",
-  "instruments",
-  "drills",
-  "shipping",
-  "default part family",
-]);
+// Everything else (Abutments, Healing Caps, Screws, Transfers, Drills, Instruments,
+// Kits with tools, Tools, Diamond Burr, Empty Cassettes, Augma, Shipping, Marketing
+// Warehouse, Default part family, Plastic for Casting, etc.) is treated as
+// tools/supplies and ignored for profile classification.
+
+// ── Thresholds (stored as ratios for Spencer to audit/tune) ───────────────────
+// raFraction = raUnits / (tuffUnits + raUnits)
+//   > 0.80 → ra_only   (RA dominant, handful of TUFFs)
+//   < 0.15 → full_arch (TUFF dominant, only a couple RA)
+//   else   → everything (both meaningful)
+const RA_ONLY_THRESHOLD = 0.80;
+const FULL_ARCH_THRESHOLD = 0.15;
+
+// ── Helper types ─────────────────────────────────────────────────────────────
+
+/** Raw unit/ratio breakdown stored on each customer for auditing and threshold tuning. */
+export interface ProfileRatios {
+  tuffUnits: number;
+  raUnits: number;
+  otherUnits: number;
+  /** tuffUnits as % of total clinical units (0–100, integer) */
+  tuffPct: number;
+  /** raUnits as % of total clinical units (0–100, integer) */
+  raPct: number;
+  /** otherUnits as % of total clinical units (0–100, integer) */
+  otherPct: number;
+}
+
+/** Parsed per-family numbers from a Sheet2 row — stored on the customer. */
+export type ProductFamilyBreakdown = Record<string, { qty: number; sales: number }>;
+
+export interface CustomerProductSummary {
+  /** Customer name as it appears in Sheet2 */
+  customerName: string;
+  state: string;
+  /** Per-family obligo totals: { "Zygomatic_Implant": { qty: 2, sales: 14000 }, ... } */
+  productFamilyBreakdown: ProductFamilyBreakdown;
+  /** Derived procedure profile from new majority-based TUFF/RA logic */
+  profile: CustomerProfile;
+  /** Raw unit counts and percentages for auditing/threshold tuning */
+  profileRatios: ProfileRatios;
+}
+
+// ── Key sanitization (Firebase-safe keys) ────────────────────────────────────
 
 /**
  * Sanitize a product family name for use as a Firebase Realtime Database key.
@@ -68,7 +106,8 @@ function sanitizeFamilyKey(name: string): string {
 /**
  * Normalize a (possibly sanitized) family key for set-membership lookups.
  * Converts underscores and hyphens back to spaces so sanitized keys still
- * match the ZYGO_FAMILIES / FULL_ARCH_FAMILIES / etc. sets.
+ * match the RA_FAMILIES / TUFF_FAMILIES / etc. sets.
+ * E.g. "MBI_N-C_Implant" → "mbi n c implant" → matches OTHER_IMPLANT_FAMILIES ✓
  */
 function normalizeFamily(raw: string): string {
   return raw
@@ -78,64 +117,70 @@ function normalizeFamily(raw: string): string {
     .trim();
 }
 
-/** Derive a CustomerProfile from per-family qty+sales breakdown (obligo only). */
-function deriveProfile(
-  breakdown: Record<string, { qty: number; sales: number }>
-): CustomerProfile {
-  let hasZygo = false;
-  let hasPtery = false;
-  let hasFullArch = false;
-  let hasStandard = false;
-  let hasClinical = false;
+// ── Profile derivation ────────────────────────────────────────────────────────
 
-  for (const family of Object.keys(breakdown)) {
-    const normalized = normalizeFamily(family);
-    if (ZYGO_FAMILIES.has(normalized)) { hasZygo = true; hasClinical = true; }
-    else if (PTERY_FAMILIES.has(normalized)) { hasPtery = true; hasClinical = true; }
-    else if (FULL_ARCH_FAMILIES.has(normalized)) { hasFullArch = true; hasClinical = true; }
-    else if (STANDARD_FAMILIES.has(normalized)) { hasStandard = true; hasClinical = true; }
-    else if (!TOOLS_ONLY_FAMILIES.has(normalized)) {
-      // Unknown family — count as standard rather than dropping
-      hasClinical = true;
+/**
+ * Derive CustomerProfile and ProfileRatios from per-family qty breakdown.
+ * Uses obligo qty only (credit rows are stripped at parse time).
+ */
+function deriveProfileAndRatios(
+  breakdown: ProductFamilyBreakdown
+): { profile: CustomerProfile; profileRatios: ProfileRatios } {
+  let tuffUnits = 0;
+  let raUnits = 0;
+  let otherUnits = 0;
+
+  for (const [familyKey, { qty }] of Object.entries(breakdown)) {
+    const normalized = normalizeFamily(familyKey);
+    if (RA_FAMILIES.has(normalized))               raUnits += qty;
+    else if (TUFF_FAMILIES.has(normalized))         tuffUnits += qty;
+    else if (OTHER_IMPLANT_FAMILIES.has(normalized)) otherUnits += qty;
+    // else: tools/supplies — not counted in clinical units
+  }
+
+  const totalClinical = tuffUnits + raUnits + otherUnits;
+
+  // Percentages as 0–100 integers (round-trip safe for Firebase)
+  const tuffPct = totalClinical > 0 ? Math.round((tuffUnits / totalClinical) * 100) : 0;
+  const raPct   = totalClinical > 0 ? Math.round((raUnits   / totalClinical) * 100) : 0;
+  const otherPct = totalClinical > 0 ? Math.round((otherUnits / totalClinical) * 100) : 0;
+
+  const profileRatios: ProfileRatios = { tuffUnits, raUnits, otherUnits, tuffPct, raPct, otherPct };
+
+  let profile: CustomerProfile;
+
+  if (totalClinical === 0) {
+    // No implants at all — only tools/supplies or empty breakdown
+    profile = "tools_only";
+  } else if (tuffUnits === 0 && raUnits === 0) {
+    // Other implants only (MBI/Mono/Multi Unit) — no TUFF or RA
+    profile = "other";
+  } else {
+    // Has at least some TUFF or RA units — apply majority rule
+    const tuffPlusRa = tuffUnits + raUnits;
+    const raFraction = tuffPlusRa > 0 ? raUnits / tuffPlusRa : 0;
+
+    if (raFraction >= RA_ONLY_THRESHOLD) {
+      // RA is overwhelming majority — a handful of TUFFs doesn't change the picture
+      profile = "ra_only";
+    } else if (raFraction <= FULL_ARCH_THRESHOLD) {
+      // TUFF is overwhelming majority — only a couple RA units
+      profile = "full_arch";
+    } else {
+      // Both TUFF and RA are meaningfully present
+      profile = "everything";
     }
   }
 
-  const hasZygoPtery = hasZygo || hasPtery;
-
-  if (hasZygoPtery && hasFullArch) return "everything";
-  if (hasZygoPtery) return "ra_only";
-  if (hasFullArch) return "full_arch";
-  if (hasStandard) return "standard";
-  if (hasClinical) return "standard"; // unknown clinical family
-  return "tools_only";
+  return { profile, profileRatios };
 }
 
-/** Parsed per-family numbers from a Sheet2 row — stored on the customer. */
-export type ProductFamilyBreakdown = Record<string, { qty: number; sales: number }>;
-
-export interface CustomerProductSummary {
-  /** Customer name as it appears in Sheet2 */
-  customerName: string;
-  state: string;
-  /** Per-family obligo totals: { "Zygomatic Implant": { qty: 2, sales: 14000 }, ... } */
-  productFamilyBreakdown: ProductFamilyBreakdown;
-  /** Highest procedure profile tier derived from productFamilyBreakdown */
-  profile: CustomerProfile;
-}
-
-/** Parse a numeric value from a CSV cell — strips $, commas, whitespace. */
-function parseCellNumber(raw: string | undefined): number {
-  if (!raw) return 0;
-  const cleaned = raw.replace(/[$,\s]/g, "");
-  const n = parseFloat(cleaned);
-  return isFinite(n) ? n : 0;
-}
-
-// ── Shared row processor (used by both sync and async parsers) ────────────────
+// ── Shared row processor ──────────────────────────────────────────────────────
 
 /**
  * Apply one parsed CSV row to the running customer state.
  * Mutates `summaries` and returns the (possibly updated) `current` customer.
+ * Note: profile/profileRatios are placeholder until finalizeProfiles() is called.
  */
 function applyRow(
   row: Record<string, string>,
@@ -143,14 +188,20 @@ function applyRow(
   current: CustomerProductSummary | null
 ): CustomerProductSummary | null {
   const rawCustomer = (row["Customer"] ?? "").trim();
-  const rawFamily = (row["Product Family"] ?? "").trim();
-  const state = (row["State"] ?? "").trim().toUpperCase();
+  const rawFamily   = (row["Product Family"] ?? "").trim();
+  const state       = (row["State"] ?? "").trim().toUpperCase();
 
   if (rawCustomer) {
     if (current) summaries.push(current);
     // Skip DO NOT USE customers
     if (/\bdo\s+not\s+use\b/i.test(rawCustomer)) return null;
-    return { customerName: rawCustomer, state, productFamilyBreakdown: {}, profile: "new" };
+    return {
+      customerName: rawCustomer,
+      state,
+      productFamilyBreakdown: {},
+      profile: "new",
+      profileRatios: { tuffUnits: 0, raUnits: 0, otherUnits: 0, tuffPct: 0, raPct: 0, otherPct: 0 },
+    };
   }
 
   if (!current) return null;
@@ -164,22 +215,32 @@ function applyRow(
 
   // Accumulate qty + sales per family.
   // Key is sanitized for Firebase (no . # $ [ ] /); normalizeFamily() reverses
-  // sanitization so deriveProfile() still matches the known family sets.
+  // sanitization so deriveProfileAndRatios() still matches the known family sets.
   const familyKey = sanitizeFamilyKey(rawFamily);
-  const qty = parseCellNumber(row["Qty"]);
+  const qty   = parseCellNumber(row["Qty"]);
   const sales = parseCellNumber(row["Sales $"]);
 
   if (!current.productFamilyBreakdown[familyKey]) {
     current.productFamilyBreakdown[familyKey] = { qty: 0, sales: 0 };
   }
-  current.productFamilyBreakdown[familyKey].qty += qty;
+  current.productFamilyBreakdown[familyKey].qty   += qty;
   current.productFamilyBreakdown[familyKey].sales += sales;
   return current;
 }
 
+/** Parse a numeric value from a CSV cell — strips $, commas, whitespace. */
+function parseCellNumber(raw: string | undefined): number {
+  if (!raw) return 0;
+  const cleaned = raw.replace(/[$,\s]/g, "");
+  const n = parseFloat(cleaned);
+  return isFinite(n) ? n : 0;
+}
+
 function finalizeProfiles(summaries: CustomerProductSummary[]): void {
   for (const summary of summaries) {
-    summary.profile = deriveProfile(summary.productFamilyBreakdown);
+    const { profile, profileRatios } = deriveProfileAndRatios(summary.productFamilyBreakdown);
+    summary.profile = profile;
+    summary.profileRatios = profileRatios;
   }
 }
 

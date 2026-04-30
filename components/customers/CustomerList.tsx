@@ -21,12 +21,13 @@ const TEMP_OPTIONS: LeadTemperature[] = ["cold", "warm", "hot", "engaged"];
 
 // Procedure profiles from Sheet2 import (excludes "new" which means no Sheet2 data)
 const PROFILE_OPTIONS: { value: CustomerProfile; label: string }[] = [
-  { value: "everything",  label: "Everything"  },
-  { value: "full_arch",   label: "Full arch"   },
-  { value: "ra_only",     label: "RA only"     },
-  { value: "standard",    label: "Standard"    },
-  { value: "course_only", label: "Course only" },
-  { value: "tools_only",  label: "Tools only"  },
+  { value: "everything",  label: "Everything"     },
+  { value: "full_arch",   label: "Full arch"      },
+  { value: "ra_only",     label: "RA only"        },
+  { value: "other",       label: "Other implants" },
+  { value: "standard",    label: "Standard"       },
+  { value: "course_only", label: "Course only"    },
+  { value: "tools_only",  label: "Tools only"     },
 ];
 
 interface CustomerListProps {

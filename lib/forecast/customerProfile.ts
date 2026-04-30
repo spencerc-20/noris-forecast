@@ -19,9 +19,10 @@ const PROFILE_RANK: Record<CustomerProfile, number> = {
   full_arch: 2,
   ra_only: 3,
   standard: 4,
-  course_only: 5,
-  tools_only: 6,
-  new: 7,
+  other: 5,      // Sheet2-derived: has Other implants (MBI/Mono) but no TUFF or RA
+  course_only: 6,
+  tools_only: 7,
+  new: 8,
 };
 
 interface WonDeal {

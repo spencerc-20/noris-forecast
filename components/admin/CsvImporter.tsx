@@ -335,14 +335,28 @@ export function CsvImporter() {
         {preview.format === "sheet2" && preview.profileBreakdown && (
           <div className="rounded-lg border bg-zinc-50 p-3 space-y-1">
             <p className="text-xs font-medium text-muted-foreground mb-1">Derived profiles</p>
-            {Object.entries(preview.profileBreakdown)
-              .sort((a, b) => b[1] - a[1])
-              .map(([profile, count]) => (
-                <div key={profile} className="flex justify-between text-sm">
-                  <span className="capitalize">{profile.replace(/_/g, " ")}</span>
-                  <span className="tabular-nums text-muted-foreground">{count}</span>
-                </div>
-              ))}
+            {(["everything", "full_arch", "ra_only", "other", "standard", "tools_only", "course_only", "new"] as const)
+              .filter((p) => (preview.profileBreakdown?.[p] ?? 0) > 0)
+              .map((profile) => {
+                const LABELS: Record<string, string> = {
+                  everything:  "Everything (TUFF + RA both present)",
+                  full_arch:   "Full Arch (TUFF dominant)",
+                  ra_only:     "RA Only (RA dominant)",
+                  other:       "Other implants (MBI / Mono / Multi Unit)",
+                  standard:    "Standard",
+                  tools_only:  "Tools only",
+                  course_only: "Course only",
+                  new:         "No implant data",
+                };
+                return (
+                  <div key={profile} className="flex justify-between text-sm">
+                    <span>{LABELS[profile] ?? profile}</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {preview.profileBreakdown?.[profile] ?? 0}
+                    </span>
+                  </div>
+                );
+              })}
           </div>
         )}
 

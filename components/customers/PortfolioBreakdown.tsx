@@ -25,6 +25,7 @@ const PROFILE_LABELS: Record<CustomerProfile, string> = {
   full_arch: "Full arch",
   ra_only: "RA only",
   standard: "Standard",
+  other: "Other implants",
   course_only: "Course",
   tools_only: "Tools",
   new: "New",
@@ -35,6 +36,7 @@ const PROFILE_COLORS: Record<CustomerProfile, string> = {
   full_arch: "#4338ca",
   ra_only: "#1d4ed8",
   standard: "#0284c7",
+  other: "#0d9488",
   course_only: "#d97706",
   tools_only: "#71717a",
   new: "#a1a1aa",
@@ -95,7 +97,7 @@ export function PortfolioBreakdown({ customers }: PortfolioBreakdownProps) {
       counts[c.profile] = (counts[c.profile] ?? 0) + 1;
     }
     const order: CustomerProfile[] = [
-      "everything", "full_arch", "ra_only", "standard", "course_only", "tools_only", "new",
+      "everything", "full_arch", "ra_only", "standard", "other", "course_only", "tools_only", "new",
     ];
     return order
       .filter((p) => (counts[p] ?? 0) > 0)

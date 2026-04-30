@@ -28,6 +28,7 @@ export type CustomerProfile =
   | "new"
   | "tools_only"
   | "course_only"
+  | "other"
   | "standard"
   | "ra_only"
   | "full_arch"

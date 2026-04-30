@@ -256,6 +256,7 @@ export async function runSheet2Import(
     newProfile: string;
     newProcedureProfile: string;
     productFamilyBreakdown: Record<string, { qty: number; sales: number }>;
+    profileRatios: CustomerProductSummary["profileRatios"];
   }
   const pending: PendingS2[] = [];
   let skipped = 0;
@@ -278,6 +279,7 @@ export async function runSheet2Import(
       newProfile,
       newProcedureProfile,
       productFamilyBreakdown: summary.productFamilyBreakdown,
+      profileRatios: summary.profileRatios,
     });
   }
 
@@ -290,6 +292,7 @@ export async function runSheet2Import(
       multiPath[`customers/${p.customerId}/profileUpdatedAt`] = now;
       multiPath[`customers/${p.customerId}/productFamilyBreakdown`] = p.productFamilyBreakdown;
       multiPath[`customers/${p.customerId}/procedureProfile`] = p.newProcedureProfile;
+      multiPath[`customers/${p.customerId}/profileRatios`] = p.profileRatios;
     }
     await update(ref(db, DB_ROOT), multiPath);
   }
@@ -628,6 +631,7 @@ export async function runBulkSheet2Import(
     newProfile: string;
     newProcedureProfile: string;
     productFamilyBreakdown: Record<string, { qty: number; sales: number }>;
+    profileRatios: CustomerProductSummary["profileRatios"];
   }
 
   const pending: PendingS2[] = [];
@@ -656,6 +660,7 @@ export async function runBulkSheet2Import(
         newProfile,
         newProcedureProfile,
         productFamilyBreakdown: summary.productFamilyBreakdown,
+        profileRatios: summary.profileRatios,
       });
     }
   }
@@ -670,11 +675,12 @@ export async function runBulkSheet2Import(
     const multiPath: Record<string, unknown> = {};
 
     for (const p of chunk) {
-      // Four field paths per customer — no logEdit (import batch is the audit trail)
+      // Five field paths per customer — no logEdit (import batch is the audit trail)
       multiPath[`customers/${p.customerId}/profile`] = p.newProfile;
       multiPath[`customers/${p.customerId}/profileUpdatedAt`] = now;
       multiPath[`customers/${p.customerId}/productFamilyBreakdown`] = p.productFamilyBreakdown;
       multiPath[`customers/${p.customerId}/procedureProfile`] = p.newProcedureProfile;
+      multiPath[`customers/${p.customerId}/profileRatios`] = p.profileRatios;
     }
 
     await update(ref(db, DB_ROOT), multiPath);

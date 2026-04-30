@@ -32,10 +32,25 @@ export interface Customer {
   profileUpdatedAt: number | null; // Unix timestamp ms
 
   // Sheet2-derived fields (populated by product-family CSV import)
-  /** Per-family obligo totals from Sheet2: { "Zygomatic Implant": { qty: 2, sales: 14000 }, ... } */
+  /** Per-family obligo totals from Sheet2: { "Zygomatic_Implant": { qty: 2, sales: 14000 }, ... } */
   productFamilyBreakdown?: { [family: string]: { qty: number; sales: number } };
-  /** Highest procedure profile tier from Sheet2 product history. Never demotes. */
+  /** Procedure profile derived from Sheet2 TUFF/RA/Other unit ratios. Never demotes. */
   procedureProfile?: CustomerProfile;
+  /**
+   * Raw unit counts and percentages used to derive procedureProfile.
+   * Stored so Spencer can audit classifications and tune thresholds later.
+   */
+  profileRatios?: {
+    tuffUnits: number;
+    raUnits: number;
+    otherUnits: number;
+    /** tuffUnits as % of total clinical units (0–100, integer) */
+    tuffPct: number;
+    /** raUnits as % of total clinical units (0–100, integer) */
+    raPct: number;
+    /** otherUnits as % of total clinical units (0–100, integer) */
+    otherPct: number;
+  };
 
   // Ownership
   ownerId: string;
