@@ -23,33 +23,41 @@ import Papa from "papaparse";
 import type { CustomerProfile } from "@/types";
 
 // ── Product family classification sets ────────────────────────────────────────
-// All entries are in normalised form (lowercase, underscores/hyphens → space).
+// Keys are in LOWERCASE SANITIZED FORM — exactly as stored in Firebase after
+// sanitizeFamilyKey(), but lowercased.  The classifier uses familyKey.toLowerCase()
+// for direct lookup, avoiding the fragile normalizeFamily() reverse-transform.
+//
+// Actual stored keys (from Firebase survey of all 31 distinct keys, 2026-04-30):
+//   RA    : Zygomatic_Implant  Zygoma_Drills  IMPLANTS_PTERYFIT
+//   TUFF  : Tuff,_Tuff_TT  Tuff_Pro_Implant  Implants_Tuff_UniCon  Unicon_Family
+//   Other : Multi_Unit  Mono_Implants  Mono_Bendable  MBI_N-C_Implant  MBI_Implant
+//   Tools : everything else (Abutments, Healing_Caps, Screws, Transfers,_Ball_Attachments,_Ana,
+//           Drills, Instruments, Kits_with_tools, Tools, Diamond_Burr, Empty_Cassettes,
+//           Augma_Product, Shipping, Marketing_Warehouse, Default_part_family,
+//           Plastic_for_Casting,_Locks, Dummy_Implants, Onyx_Implant, Cortical_Implant, …)
 
 const RA_FAMILIES = new Set([
-  "zygomatic implant",
-  "zygoma drills",
-  "implants pteryfit",
+  "zygomatic_implant",
+  "zygoma_drills",
+  "implants_pteryfit",
 ]);
 
 const TUFF_FAMILIES = new Set([
-  "tuff",
-  "tuff pro implant",
-  "implants tuff unicon",
-  "unicon family",
+  "tuff,_tuff_tt",        // "Tuff, Tuff TT" → sanitised "Tuff,_Tuff_TT" → lower "tuff,_tuff_tt"
+  "tuff_pro_implant",
+  "implants_tuff_unicon",
+  "unicon_family",
 ]);
 
 const OTHER_IMPLANT_FAMILIES = new Set([
-  "mbi implant",
-  "mbi n c implant",   // "MBI N/C Implant" → sanitised "MBI_N-C_Implant" → normalised "mbi n c implant"
-  "mono bendable",
-  "mono implants",
-  "multi unit",
+  "multi_unit",
+  "mono_implants",
+  "mono_bendable",
+  "mbi_n-c_implant",      // "MBI N/C Implant" → sanitised "MBI_N-C_Implant" → lower "mbi_n-c_implant"
+  "mbi_implant",
 ]);
 
-// Everything else (Abutments, Healing Caps, Screws, Transfers, Drills, Instruments,
-// Kits with tools, Tools, Diamond Burr, Empty Cassettes, Augma, Shipping, Marketing
-// Warehouse, Default part family, Plastic for Casting, etc.) is treated as
-// tools/supplies and ignored for profile classification.
+// Everything else is treated as tools/supplies and ignored for profile classification.
 
 // ── Thresholds (stored as ratios for Spencer to audit/tune) ───────────────────
 // raFraction = raUnits / (tuffUnits + raUnits)
@@ -131,10 +139,13 @@ function deriveProfileAndRatios(
   let otherUnits = 0;
 
   for (const [familyKey, { qty }] of Object.entries(breakdown)) {
-    const normalized = normalizeFamily(familyKey);
-    if (RA_FAMILIES.has(normalized))               raUnits += qty;
-    else if (TUFF_FAMILIES.has(normalized))         tuffUnits += qty;
-    else if (OTHER_IMPLANT_FAMILIES.has(normalized)) otherUnits += qty;
+    // Use familyKey.toLowerCase() directly — the family sets contain lowercase sanitized keys
+    // (e.g. "tuff,_tuff_tt") so we avoid the fragile normalizeFamily() path where commas
+    // and other non-space/underscore chars survive and cause silent mismatches.
+    const lowerKey = familyKey.toLowerCase();
+    if (RA_FAMILIES.has(lowerKey))               raUnits += qty;
+    else if (TUFF_FAMILIES.has(lowerKey))         tuffUnits += qty;
+    else if (OTHER_IMPLANT_FAMILIES.has(lowerKey)) otherUnits += qty;
     // else: tools/supplies — not counted in clinical units
   }
 

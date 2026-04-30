@@ -34,31 +34,36 @@ BATCH   = 50
 RA_ONLY_THRESHOLD    = 0.80
 FULL_ARCH_THRESHOLD  = 0.15
 
-# ── Family sets (normalized form) ────────────────────────────────────────────
+# ── Family sets (lowercase sanitized form — mirrors sheet2Parser.ts) ─────────
+# Keys are exactly what Firebase stores, lowercased.
+# Use family_key.lower() for direct lookup — do NOT use normalize_family()
+# for classification, since commas survive normalization and cause mismatches.
+# E.g. "Tuff,_Tuff_TT".lower() == "tuff,_tuff_tt" ✓
+#      normalize_family("Tuff,_Tuff_TT") == "tuff, tuff tt"  ← comma stays, no match
 RA_FAMILIES = {
-    "zygomatic implant",
-    "zygoma drills",
-    "implants pteryfit",
+    "zygomatic_implant",
+    "zygoma_drills",
+    "implants_pteryfit",
 }
 
 TUFF_FAMILIES = {
-    "tuff",
-    "tuff pro implant",
-    "implants tuff unicon",
-    "unicon family",
+    "tuff,_tuff_tt",         # "Tuff, Tuff TT" → sanitised "Tuff,_Tuff_TT" → lower
+    "tuff_pro_implant",
+    "implants_tuff_unicon",
+    "unicon_family",
 }
 
 OTHER_IMPLANT_FAMILIES = {
-    "mbi implant",
-    "mbi n c implant",   # MBI N/C Implant → sanitised MBI_N-C_Implant → normalised "mbi n c implant"
-    "mono bendable",
-    "mono implants",
-    "multi unit",
+    "mbi_implant",
+    "mbi_n-c_implant",       # "MBI N/C Implant" → sanitised "MBI_N-C_Implant" → lower
+    "mono_bendable",
+    "mono_implants",
+    "multi_unit",
 }
 
 
 def normalize_family(raw: str) -> str:
-    """Mirror normalizeFamily() in sheet2Parser.ts: lowercase, _ and - → space."""
+    """Kept for potential future use — NOT used for profile classification."""
     s = raw.lower()
     s = re.sub(r"[_\-]", " ", s)
     s = re.sub(r"\s+", " ", s)
@@ -73,12 +78,14 @@ def derive_profile_and_ratios(breakdown: dict) -> tuple[str, dict]:
 
     for family_key, entry in breakdown.items():
         qty = entry.get("qty", 0) if isinstance(entry, dict) else 0
-        normalized = normalize_family(family_key)
-        if normalized in RA_FAMILIES:
+        # Use family_key.lower() directly against lowercase sanitized sets —
+        # avoids the fragile normalize_family() path where commas survive.
+        lower_key = family_key.lower()
+        if lower_key in RA_FAMILIES:
             ra_units += qty
-        elif normalized in TUFF_FAMILIES:
+        elif lower_key in TUFF_FAMILIES:
             tuff_units += qty
-        elif normalized in OTHER_IMPLANT_FAMILIES:
+        elif lower_key in OTHER_IMPLANT_FAMILIES:
             other_units += qty
         # else: tools/supplies — ignored
 
