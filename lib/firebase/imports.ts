@@ -22,7 +22,9 @@ export async function getImportBatches(): Promise<ImportBatch[]> {
   if (!snap.exists()) return [];
   const batches: ImportBatch[] = [];
   snap.forEach((child) => {
-    batches.push({ id: child.key!, ...child.val() } as ImportBatch);
+    const val = child.val();
+    // Firebase omits empty arrays — normalise so errors is always an array.
+    batches.push({ errors: [], columnMapping: {}, ...val, id: child.key! } as ImportBatch);
   });
   return batches.sort((a, b) => b.importedAt - a.importedAt);
 }
