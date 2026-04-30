@@ -176,6 +176,7 @@ for b in range(0, len(targets), BATCH):
         profile, ratios = derive_profile_and_ratios(breakdown)
         profile_counts[profile] = profile_counts.get(profile, 0) + 1
 
+        patch[f"forecast_v1/customers/{cid}/profile"]          = profile
         patch[f"forecast_v1/customers/{cid}/procedureProfile"] = profile
         patch[f"forecast_v1/customers/{cid}/profileRatios"]    = ratios
         patch[f"forecast_v1/customers/{cid}/profileUpdatedAt"] = now_ts

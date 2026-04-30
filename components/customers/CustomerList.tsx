@@ -58,7 +58,7 @@ export function CustomerList({ customers }: CustomerListProps) {
       result = result.filter((c) => c.leadTemperature === filterTemp);
     }
     if (filterProfile) {
-      result = result.filter((c) => c.procedureProfile === filterProfile);
+      result = result.filter((c) => c.profile === filterProfile);
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }, [customers, search, filterLifecycle, filterTemp, filterProfile]);
