@@ -15,8 +15,10 @@ import { saveImportBatch } from "@/lib/firebase/imports";
 import { getTerritories } from "@/lib/firebase/config";
 import { regionForState } from "@/lib/forecast/regionConfig";
 import type { TerritoryEntry } from "@/types";
-import { computeCommissionStatus } from "@/lib/forecast/commissionStatus";
-import { higherProfile } from "@/lib/forecast/customerProfile";
+// REVAMP v2.0: commission-status computation and Sheet 2 higherProfile() were
+// removed along with the deals system. Sheet 1 import still writes annualRevenue
+// + legacy lifecycleStatus (those fields remain on the Customer type as
+// deprecated, but stored historical data is preserved).
 import type { Customer, ImportBatch, ImportError, LifecycleStatus } from "@/types";
 
 /** Firebase root — matches the DB root used across all lib/firebase/* files. */
@@ -133,13 +135,6 @@ export async function runImport(
       mergedSource[parseInt(yr, 10)] = "csv_import";
     }
 
-    const revenueYears = Object.keys(mergedRevenue).map(Number);
-    const commissionYears = [
-      ...new Set(revenueYears.flatMap((y) => [y - 1, y, y + 1])),
-    ].filter((y) => y >= 2020);
-    const newCommissionStatus = computeCommissionStatus(commissionYears, mergedRevenue, []);
-    const mergedCommission = { ...(existing?.commissionStatus ?? {}), ...newCommissionStatus };
-
     try {
       if (existing) {
         const newLifecycle = classifyLifecycleFromRevenue(
@@ -152,7 +147,6 @@ export async function runImport(
           {
             annualRevenue: mergedRevenue,
             revenueDataSource: mergedSource,
-            commissionStatus: mergedCommission,
             lifecycleStatus: newLifecycle,
             region: existing.region || region,
             ...(existing.practiceName ? {} : row.practiceName ? { practiceName: row.practiceName } : {}),
@@ -230,8 +224,9 @@ export interface Sheet2RunResult {
 }
 
 /**
- * Sheet2 import: product family breakdown → update customer profiles (single rep).
- * Profiles never demote (uses higherProfile). Only updates existing customers.
+ * Sheet2 import: product family breakdown → update customer docType (single rep).
+ * REVAMP v2.0: writes the derived docType directly unless the rep has marked
+ * docTypeIsOverride=true. Only updates customers that already exist for this rep.
  *
  * Pass `preloadedSummaries` (from the async preview parse) to skip re-parsing.
  */
@@ -250,11 +245,11 @@ export async function runSheet2Import(
     existingCustomers.map((c) => [c.name.toLowerCase(), c])
   );
 
-  // Build pending write list
+  // Build pending write list. REVAMP v2.0: respect docTypeIsOverride — never
+  // clobber a rep's manual doc-type pick. Otherwise just write the derived value.
   interface PendingS2 {
     customerId: string;
-    newProfile: string;
-    newProcedureProfile: string;
+    newDocType: string | null; // null = leave existing docType alone (rep override)
     productFamilyBreakdown: Record<string, { qty: number; sales: number }>;
     profileRatios: CustomerProductSummary["profileRatios"];
   }
@@ -269,15 +264,9 @@ export async function runSheet2Import(
 
     if (!existing) { skipped++; continue; }
 
-    const newProfile = higherProfile(summary.profile, existing.profile);
-    const newProcedureProfile = higherProfile(
-      summary.profile,
-      existing.procedureProfile ?? "new"
-    );
     pending.push({
       customerId: existing.id,
-      newProfile,
-      newProcedureProfile,
+      newDocType: existing.docTypeIsOverride ? null : summary.docType,
       productFamilyBreakdown: summary.productFamilyBreakdown,
       profileRatios: summary.profileRatios,
     });
@@ -288,11 +277,11 @@ export async function runSheet2Import(
     const chunk = pending.slice(i, i + BULK_BATCH_SIZE);
     const multiPath: Record<string, unknown> = {};
     for (const p of chunk) {
-      multiPath[`customers/${p.customerId}/profile`] = p.newProfile;
-      multiPath[`customers/${p.customerId}/profileUpdatedAt`] = now;
       multiPath[`customers/${p.customerId}/productFamilyBreakdown`] = p.productFamilyBreakdown;
-      multiPath[`customers/${p.customerId}/procedureProfile`] = p.newProcedureProfile;
       multiPath[`customers/${p.customerId}/profileRatios`] = p.profileRatios;
+      if (p.newDocType !== null) {
+        multiPath[`customers/${p.customerId}/docType`] = p.newDocType;
+      }
     }
     await update(ref(db, DB_ROOT), multiPath);
   }
@@ -305,7 +294,7 @@ export async function runSheet2Import(
     successCount: pending.length,
     errorCount: skipped,
     errors: [],
-    columnMapping: { Customer: "customerName", "Product Family": "profile" },
+    columnMapping: { Customer: "customerName", "Product Family": "docType" },
   });
 
   return { updated: pending.length, skipped, batch };
@@ -440,11 +429,6 @@ export async function runBulkImport(
       for (const yr of Object.keys(row.annualRevenue)) {
         mergedSource[parseInt(yr, 10)] = "csv_import";
       }
-      const revenueYears = Object.keys(mergedRevenue).map(Number);
-      const commissionYears = [...new Set(revenueYears.flatMap((y) => [y - 1, y, y + 1]))].filter((y) => y >= 2020);
-      const newCommissionStatus = computeCommissionStatus(commissionYears, mergedRevenue, []);
-      const mergedCommission = { ...(existing?.commissionStatus ?? {}), ...newCommissionStatus };
-
       if (existing) {
         const newLifecycle = classifyLifecycleFromRevenue(existing.lifecycleStatus, mergedRevenue, currentYear);
         pending.push({
@@ -454,7 +438,6 @@ export async function runBulkImport(
           payload: {
             annualRevenue: mergedRevenue,
             revenueDataSource: mergedSource,
-            commissionStatus: mergedCommission,
             lifecycleStatus: newLifecycle,
             region: existing.region || region,
             ...(existing.practiceName ? {} : row.practiceName ? { practiceName: row.practiceName } : {}),
@@ -489,7 +472,9 @@ export async function runBulkImport(
             notes: row.notes ?? "",
             annualRevenue: mergedRevenue,
             revenueDataSource: mergedSource,
-            commissionStatus: mergedCommission,
+            commissionStatus: {},
+            pipelineType: newLifecycle === "existing" ? "existing" : "new",
+            docType: "other",
             profile: "new",
             profileUpdatedAt: now,
             lastMeetingDate: null,
@@ -628,8 +613,7 @@ export async function runBulkSheet2Import(
 
   interface PendingS2 {
     customerId: string;
-    newProfile: string;
-    newProcedureProfile: string;
+    newDocType: string | null; // null = leave existing docType alone (rep override)
     productFamilyBreakdown: Record<string, { qty: number; sales: number }>;
     profileRatios: CustomerProductSummary["profileRatios"];
   }
@@ -650,15 +634,9 @@ export async function runBulkSheet2Import(
         byNameLower.get(nameLower.split(" - ")[0].trim());
       if (!existing) { skipped++; continue; }
 
-      const newProfile = higherProfile(summary.profile, existing.profile);
-      const newProcedureProfile = higherProfile(
-        summary.profile,
-        existing.procedureProfile ?? "new"
-      );
       pending.push({
         customerId: existing.id,
-        newProfile,
-        newProcedureProfile,
+        newDocType: existing.docTypeIsOverride ? null : summary.docType,
         productFamilyBreakdown: summary.productFamilyBreakdown,
         profileRatios: summary.profileRatios,
       });
@@ -675,12 +653,12 @@ export async function runBulkSheet2Import(
     const multiPath: Record<string, unknown> = {};
 
     for (const p of chunk) {
-      // Five field paths per customer — no logEdit (import batch is the audit trail)
-      multiPath[`customers/${p.customerId}/profile`] = p.newProfile;
-      multiPath[`customers/${p.customerId}/profileUpdatedAt`] = now;
+      // Per-customer paths — no logEdit (import batch is the audit trail).
       multiPath[`customers/${p.customerId}/productFamilyBreakdown`] = p.productFamilyBreakdown;
-      multiPath[`customers/${p.customerId}/procedureProfile`] = p.newProcedureProfile;
       multiPath[`customers/${p.customerId}/profileRatios`] = p.profileRatios;
+      if (p.newDocType !== null) {
+        multiPath[`customers/${p.customerId}/docType`] = p.newDocType;
+      }
     }
 
     await update(ref(db, DB_ROOT), multiPath);
@@ -696,7 +674,7 @@ export async function runBulkSheet2Import(
     successCount: written,
     errorCount: skipped,
     errors: [],
-    columnMapping: { Customer: "customerName", "Product Family": "profile" },
+    columnMapping: { Customer: "customerName", "Product Family": "docType" },
   });
 
   return { updated: written, skipped };

@@ -1,9 +1,13 @@
-// lib/firebase/customers.ts — Customer CRUD + computed-field recomputation for forecast_v1/customers.
+// lib/firebase/customers.ts — Customer CRUD for forecast_v1/customers.
 //
-// FIREBASE RULE NOTES:
-//   - add ".indexOn": ["ownerId"] to the customers node
-//   - add ".indexOn": ["ownerId"] to the deals node (already required for deal queries)
-// Recomputation queries deals by ownerId then filters client-side (no customerId index needed for V1).
+// REVAMP v2.0: the deals system has been removed, so this file no longer needs:
+//   - logEdit() (edit history is gone)
+//   - recomputeCustomerProfile / recomputeCustomerMeetings / recomputeCommissionStatus
+//   - maybePromoteCustomerLifecycle / maybeFlagInactive
+//   - the DEALS_PATH helper or any deal queries
+//
+// Firebase rule note: keep ".indexOn": ["ownerId"] on /forecast_v1/customers so
+// `subscribeToUserCustomers` stays cheap.
 
 import {
   ref,
@@ -18,16 +22,10 @@ import {
   onValue,
 } from "firebase/database";
 import { db } from "./client";
-import { logEdit } from "./history";
 import { STATE_TO_REGION } from "@/lib/forecast/regionConfig";
-import { computeProfileFromDeals, higherProfile } from "@/lib/forecast/customerProfile";
-import { computeCommissionStatus } from "@/lib/forecast/commissionStatus";
-import { promoteLifecycleOnWin, flagInactiveIfNoActivity } from "@/lib/forecast/lifecycleStatus";
-import type { Customer, Deal } from "@/types";
+import type { Customer } from "@/types";
 
-const DB_ROOT = "forecast_v1";
-const CUSTOMERS_PATH = `${DB_ROOT}/customers`;
-const DEALS_PATH = `${DB_ROOT}/deals`;
+const CUSTOMERS_PATH = "forecast_v1/customers";
 
 // ---------------------------------------------------------------------------
 // Reads
@@ -35,11 +33,7 @@ const DEALS_PATH = `${DB_ROOT}/deals`;
 
 /** One-shot read of all customers owned by a user. */
 export async function getCustomersForUser(userId: string): Promise<Customer[]> {
-  const q = query(
-    ref(db, CUSTOMERS_PATH),
-    orderByChild("ownerId"),
-    equalTo(userId)
-  );
+  const q = query(ref(db, CUSTOMERS_PATH), orderByChild("ownerId"), equalTo(userId));
   const snap = await get(q);
   if (!snap.exists()) return [];
   const customers: Customer[] = [];
@@ -61,12 +55,8 @@ export function subscribeToUserCustomers(
   userId: string,
   callback: (customers: Customer[]) => void
 ): () => void {
-  const q = query(
-    ref(db, CUSTOMERS_PATH),
-    orderByChild("ownerId"),
-    equalTo(userId)
-  );
-  const unsub = onValue(q, (snap) => {
+  const q = query(ref(db, CUSTOMERS_PATH), orderByChild("ownerId"), equalTo(userId));
+  return onValue(q, (snap) => {
     const customers: Customer[] = [];
     if (snap.exists()) {
       snap.forEach((child) => {
@@ -75,13 +65,9 @@ export function subscribeToUserCustomers(
     }
     callback(customers);
   });
-  return unsub;
 }
 
-/**
- * One-shot read of ALL customers across all reps.
- * Used by admin / manager / VP roles.
- */
+/** One-shot read of ALL customers across all reps. Manager / VP / admin only. */
 export async function getAllCustomers(): Promise<Customer[]> {
   const snap = await get(ref(db, CUSTOMERS_PATH));
   if (!snap.exists()) return [];
@@ -92,14 +78,11 @@ export async function getAllCustomers(): Promise<Customer[]> {
   return customers;
 }
 
-/**
- * Real-time subscription to ALL customers across all reps.
- * Used by admin / manager / VP roles. No ownerId filter — reads the full node.
- */
+/** Real-time subscription to ALL customers across all reps. Manager / VP / admin only. */
 export function subscribeToAllCustomers(
   callback: (customers: Customer[]) => void
 ): () => void {
-  const unsub = onValue(ref(db, CUSTOMERS_PATH), (snap) => {
+  return onValue(ref(db, CUSTOMERS_PATH), (snap) => {
     const customers: Customer[] = [];
     if (snap.exists()) {
       snap.forEach((child) => {
@@ -108,7 +91,6 @@ export function subscribeToAllCustomers(
     }
     callback(customers);
   });
-  return unsub;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +99,15 @@ export function subscribeToAllCustomers(
 
 export type CustomerCreateData = Omit<
   Customer,
-  "id" | "createdAt" | "lastMeetingDate" | "nextMeetingDate" | "commissionStatus" | "profile" | "profileUpdatedAt"
+  | "id"
+  | "createdAt"
+  | "lastMeetingDate"
+  | "nextMeetingDate"
+  | "commissionStatus"
+  | "profile"
+  | "profileUpdatedAt"
+  | "pipelineType"
+  | "docType"
 >;
 
 /** Create a new customer. Auto-assigns region from state if region is empty. */
@@ -131,6 +121,12 @@ export async function createCustomer(
   const customerData: Omit<Customer, "id"> = {
     ...data,
     region,
+    // REVAMP v2.0 defaults — every customer starts as a NEW prospect with no clinical
+    // classification. docType becomes meaningful once Sheet 2 data lands or the rep picks it.
+    pipelineType: "new",
+    docType: "other",
+    // Legacy deal-era fields kept here so reads against pre-revamp data don't 404
+    // on missing keys. The UI no longer surfaces these.
     commissionStatus: {},
     profile: "new",
     profileUpdatedAt: now,
@@ -142,251 +138,38 @@ export async function createCustomer(
 
   const newRef = push(ref(db, CUSTOMERS_PATH));
   await set(newRef, customerData);
-
-  await logEdit(newRef.key!, {
-    userId,
-    field: "_created",
-    oldValue: null,
-    newValue: data.name,
-    timestamp: now,
-  });
-
   return { id: newRef.key!, ...customerData };
 }
 
-/** Update a customer. Diffs against currentCustomer and logs only changed fields. */
+/**
+ * Lightweight field patch — used by the rep dashboard autosave.
+ * Multi-path update, no audit log, no diff. Use for inline edits.
+ */
+export async function patchCustomer(
+  customerId: string,
+  fields: Partial<Customer>
+): Promise<void> {
+  await update(ref(db, `${CUSTOMERS_PATH}/${customerId}`), fields);
+}
+
+/**
+ * Update a customer with full-field semantics (still no edit log — that subsystem
+ * was removed in the revamp). Auto-fills region if state changes.
+ */
 export async function updateCustomer(
   customerId: string,
   updates: Partial<Omit<Customer, "id" | "createdAt" | "lastMeetingDate" | "nextMeetingDate">>,
-  userId: string,
+  _userId: string,
   currentCustomer: Customer
 ): Promise<void> {
-  const now = Date.now();
-
-  // Auto-assign region if state changed and region wasn't explicitly set
   if (updates.state && !updates.region) {
     updates.region =
       STATE_TO_REGION[updates.state.toUpperCase()] || currentCustomer.region;
   }
-
   await update(ref(db, `${CUSTOMERS_PATH}/${customerId}`), updates);
-
-  for (const [field, newValue] of Object.entries(updates)) {
-    const oldValue = currentCustomer[field as keyof Customer];
-    if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
-      await logEdit(customerId, {
-        userId,
-        field,
-        oldValue: oldValue ?? null,
-        newValue: newValue ?? null,
-        timestamp: now,
-      });
-    }
-  }
 }
 
-/**
- * One-time migration: set leadTemperature = 'warm' for every customer whose
- * lifecycleStatus is 'existing' but whose temperature is still 'cold' (the old
- * import default). Uses a single multi-path update for efficiency.
- * Returns the number of customers updated.
- */
-export async function migrateExistingCustomerTemperature(): Promise<number> {
-  const snap = await get(ref(db, CUSTOMERS_PATH));
-  if (!snap.exists()) return 0;
-
-  const updates: Record<string, string> = {};
-  snap.forEach((child) => {
-    const c = child.val() as Partial<Customer>;
-    if (c.lifecycleStatus === "existing" && c.leadTemperature === "cold") {
-      updates[`${child.key!}/leadTemperature`] = "warm";
-    }
-  });
-
-  const count = Object.keys(updates).length;
-  if (count > 0) {
-    await update(ref(db, CUSTOMERS_PATH), updates);
-  }
-  return count;
-}
-
-/** Hard-delete a customer. Logs before removing. */
-export async function deleteCustomer(
-  customerId: string,
-  userId: string
-): Promise<void> {
-  await logEdit(customerId, {
-    userId,
-    field: "_deleted",
-    oldValue: "customer",
-    newValue: null,
-    timestamp: Date.now(),
-  });
+/** Hard-delete a customer. */
+export async function deleteCustomer(customerId: string, _userId: string): Promise<void> {
   await remove(ref(db, `${CUSTOMERS_PATH}/${customerId}`));
-}
-
-// ---------------------------------------------------------------------------
-// Internal: deal queries for recomputation (no import from deals.ts to avoid circular dep)
-// ---------------------------------------------------------------------------
-
-async function _getCustomerDeals(customerId: string, ownerId: string): Promise<Deal[]> {
-  const q = query(
-    ref(db, DEALS_PATH),
-    orderByChild("ownerId"),
-    equalTo(ownerId)
-  );
-  const snap = await get(q);
-  const deals: Deal[] = [];
-  if (snap.exists()) {
-    snap.forEach((child) => {
-      const deal = { id: child.key!, ...child.val() } as Deal;
-      if (deal.customerId === customerId) deals.push(deal);
-    });
-  }
-  return deals;
-}
-
-// ---------------------------------------------------------------------------
-// Computed-field recomputation (called from deals.ts after stage/meeting changes)
-// ---------------------------------------------------------------------------
-
-/**
- * Recompute and persist customer profile after a deal closes won.
- * Never demotes: only upgrades to a higher profile tier.
- */
-export async function recomputeCustomerProfile(customerId: string): Promise<void> {
-  const customer = await getCustomer(customerId);
-  if (!customer) return;
-
-  const deals = await _getCustomerDeals(customerId, customer.ownerId);
-  const wonDeals = deals.filter((d) => d.stage === "won");
-
-  const computed = computeProfileFromDeals(wonDeals);
-  const newProfile = higherProfile(computed, customer.profile);
-
-  if (newProfile === customer.profile) return;
-
-  await update(ref(db, `${CUSTOMERS_PATH}/${customerId}`), {
-    profile: newProfile,
-    profileUpdatedAt: Date.now(),
-  });
-}
-
-/**
- * Recompute customer meeting dates from all deals.
- * lastMeetingDate = max(deal.lastMeetingDate); nextMeetingDate = min(future deal.nextMeetingDate).
- * These are derived fields — never written directly.
- */
-export async function recomputeCustomerMeetings(customerId: string): Promise<void> {
-  const customer = await getCustomer(customerId);
-  if (!customer) return;
-
-  const deals = await _getCustomerDeals(customerId, customer.ownerId);
-  const todayStr = new Date().toISOString().slice(0, 10);
-
-  let lastMeetingDate: string | null = null;
-  let nextMeetingDate: string | null = null;
-
-  for (const deal of deals) {
-    if (deal.lastMeetingDate) {
-      if (!lastMeetingDate || deal.lastMeetingDate > lastMeetingDate) {
-        lastMeetingDate = deal.lastMeetingDate;
-      }
-    }
-    if (deal.nextMeetingDate && deal.nextMeetingDate >= todayStr) {
-      if (!nextMeetingDate || deal.nextMeetingDate < nextMeetingDate) {
-        nextMeetingDate = deal.nextMeetingDate;
-      }
-    }
-  }
-
-  await update(ref(db, `${CUSTOMERS_PATH}/${customerId}`), {
-    lastMeetingDate,
-    nextMeetingDate,
-  });
-}
-
-/**
- * Recompute commission status for the given years and merge into stored commissionStatus.
- * Called when a deal moves to won (recompute current year + following year).
- */
-export async function recomputeCommissionStatus(
-  customerId: string,
-  years: number[]
-): Promise<void> {
-  const customer = await getCustomer(customerId);
-  if (!customer) return;
-
-  const deals = await _getCustomerDeals(customerId, customer.ownerId);
-  const wonDeals = deals.filter((d) => d.stage === "won");
-
-  const newStatuses = computeCommissionStatus(
-    years,
-    customer.annualRevenue ?? {},
-    wonDeals
-  );
-
-  const merged = { ...customer.commissionStatus, ...newStatuses };
-  await update(ref(db, `${CUSTOMERS_PATH}/${customerId}`), {
-    commissionStatus: merged,
-  });
-}
-
-/**
- * Promote lifecycle status when a deal closes won.
- * potential / new / inactive → existing.
- */
-export async function maybePromoteCustomerLifecycle(customerId: string): Promise<void> {
-  const customer = await getCustomer(customerId);
-  if (!customer) return;
-
-  const promoted = promoteLifecycleOnWin(customer.lifecycleStatus);
-  if (promoted === customer.lifecycleStatus) return;
-
-  await update(ref(db, `${CUSTOMERS_PATH}/${customerId}`), {
-    lifecycleStatus: promoted,
-  });
-
-  await logEdit(customerId, {
-    userId: "system",
-    field: "lifecycleStatus",
-    oldValue: customer.lifecycleStatus,
-    newValue: promoted,
-    timestamp: Date.now(),
-    reason: "Auto-promoted on deal win",
-  });
-}
-
-/**
- * Flag existing customers as inactive if they have no current-year activity.
- * Intended for use in import pipeline and nightly checks (V2: Cloud Function).
- */
-export async function maybeFlagInactive(customerId: string): Promise<void> {
-  const customer = await getCustomer(customerId);
-  if (!customer) return;
-
-  const deals = await _getCustomerDeals(customerId, customer.ownerId);
-  const wonDeals = deals.filter((d) => d.stage === "won");
-  const currentYear = new Date().getFullYear();
-
-  const newStatus = flagInactiveIfNoActivity(
-    customer.lifecycleStatus,
-    currentYear,
-    customer.annualRevenue ?? {},
-    wonDeals
-  );
-  if (newStatus === customer.lifecycleStatus) return;
-
-  await update(ref(db, `${CUSTOMERS_PATH}/${customerId}`), {
-    lifecycleStatus: newStatus,
-  });
-
-  await logEdit(customerId, {
-    userId: "system",
-    field: "lifecycleStatus",
-    oldValue: customer.lifecycleStatus,
-    newValue: newStatus,
-    timestamp: Date.now(),
-    reason: "Auto-flagged inactive: no current-year activity",
-  });
 }

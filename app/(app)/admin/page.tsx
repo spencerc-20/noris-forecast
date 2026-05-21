@@ -1,8 +1,8 @@
-// app/(app)/admin/page.tsx — Admin panel: four tabs.
+// app/(app)/admin/page.tsx — Admin panel: three tabs (REVAMP v2.0).
 // Users: create / disable / enable users.
 // Territory Map: assign states to reps — must be configured before bulk CSV import.
 // CSV Import: bulk (auto-assign by state→rep) + single-rep, plus import history below.
-// Config: read-only reference for stages, procedure tiers, and deal structures.
+// (The "Config" tab was removed — it documented the deal-era taxonomy that no longer exists.)
 // Restricted to users with role "admin". Redirects others to /dashboard.
 
 "use client";
@@ -15,15 +15,13 @@ import { UserManagement } from "@/components/admin/UserManagement";
 import { StateRepAssignment } from "@/components/admin/StateRepAssignment";
 import { CsvImporter } from "@/components/admin/CsvImporter";
 import { ImportHistory } from "@/components/admin/ImportHistory";
-import { ConfigEditor } from "@/components/admin/ConfigEditor";
 
-type Tab = "users" | "territory" | "import" | "config";
+type Tab = "users" | "territory" | "import";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "users",     label: "Users" },
   { id: "territory", label: "Territory Map" },
   { id: "import",    label: "CSV Import" },
-  { id: "config",    label: "Config" },
 ];
 
 export default function AdminPage() {
@@ -49,8 +47,10 @@ export default function AdminPage() {
   if (!isAdmin(appUser)) return null;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-6 space-y-4">
-      <h1 className="text-lg font-semibold">Admin</h1>
+    <div className="mx-auto max-w-5xl px-[22px] py-7 space-y-5">
+      <h1 className="text-[18px] font-semibold text-[color:var(--text-spec)] leading-tight">
+        Admin
+      </h1>
 
       {/* Tab bar */}
       <div className="flex gap-1 flex-wrap">
@@ -58,10 +58,10 @@ export default function AdminPage() {
           <button
             key={id}
             onClick={() => setTab(id)}
-            className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+            className={`rounded-full border px-3 py-1 text-[11px] transition-colors ${
               tab === id
-                ? "bg-zinc-800 text-white border-zinc-800"
-                : "border-zinc-200 text-muted-foreground hover:border-zinc-400"
+                ? "bg-[color:var(--noris)] text-white border-[color:var(--noris)]"
+                : "border-[color:var(--border-spec)] text-[color:var(--muted-spec)] hover:text-[color:var(--text-spec)] hover:border-[color:var(--muted-spec)]"
             }`}
           >
             {label}
@@ -85,9 +85,6 @@ export default function AdminPage() {
           </div>
         </div>
       )}
-
-      {/* Config — read-only taxonomy reference */}
-      {tab === "config" && <ConfigEditor />}
     </div>
   );
 }

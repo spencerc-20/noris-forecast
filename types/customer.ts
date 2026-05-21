@@ -1,10 +1,17 @@
 // types/customer.ts — Customer interface for Firebase Realtime DB (forecast_v1/customers/{customerId})
+//
+// REVAMP v2.0 (2026-05): Active fields are pipelineType, docType, expectedMonthlyTotal/
+// closeProbability (NEW) or expectedMonthly/actualThisMonth (EXISTING). Older deal-era
+// fields (lifecycleStatus, leadTemperature, profile, commissionStatus, lostReason, etc.)
+// are kept for backward compatibility with stored data but no longer drive the UI.
 
 import type {
   CommissionStatusValue,
   CustomerProfile,
+  DocType,
   LeadTemperature,
   LifecycleStatus,
+  PipelineType,
   RevenueDataSource,
 } from "./taxonomy";
 
@@ -19,22 +26,47 @@ export interface Customer {
   phone: string;
   email: string;
 
-  // Status (two distinct fields — displayed together in UI as one "Status" widget)
+  // ── REVAMP v2.0 — active classification + forecast fields ──────────────────
+
+  /** "new" = active prospect (rep is pitching), "existing" = recurring book account. */
+  pipelineType: PipelineType;
+
+  /** Clinical doc-type — auto-derived from Sheet 2 unit mix, rep-overridable. */
+  docType: DocType;
+
+  /** True if rep manually set docType (suppresses re-derivation on next import). */
+  docTypeIsOverride?: boolean;
+
+  // NEW-pipeline fields (used when pipelineType === "new")
+  /** Dollar amount the rep expects this customer to close THIS MONTH. */
+  expectedMonthlyTotal?: number;
+  /** % likelihood the new-pipeline deal actually closes this month (0–100). */
+  closeProbability?: number;
+
+  // EXISTING-recurring fields (used when pipelineType === "existing")
+  /** Customer's normal monthly run-rate. Rep-entered baseline. */
+  expectedMonthly?: number;
+  /** $ actually purchased so far this calendar month. Rep updates as orders land. */
+  actualThisMonth?: number;
+
+  // ── DEPRECATED (kept for historical data, no longer driven by UI) ──────────
+
+  /** @deprecated Replaced by `pipelineType`. Still written by old import code paths. */
   lifecycleStatus: LifecycleStatus;
   commissionStatus: { [year: number]: CommissionStatusValue }; // system-computed, stored per year
 
-  // Temperature (rep-managed, independent of stage)
+  /** @deprecated Lead temperature dropped from revamp UI (kept for historical data). */
   leadTemperature: LeadTemperature;
   temperatureUpdatedAt: number | null; // Unix timestamp ms — drives 30-day staleness flag
 
-  // Profile (auto-derived from won deal history — never demotes)
+  /** @deprecated Replaced by `docType`. Old deal-derived profile field. */
   profile: CustomerProfile;
   profileUpdatedAt: number | null; // Unix timestamp ms
 
   // Sheet2-derived fields (populated by product-family CSV import)
   /** Per-family obligo totals from Sheet2: { "Zygomatic_Implant": { qty: 2, sales: 14000 }, ... } */
   productFamilyBreakdown?: { [family: string]: { qty: number; sales: number } };
-  /** Procedure profile derived from Sheet2 TUFF/RA/Other unit ratios. Never demotes. */
+  /** @deprecated Replaced by `docType`. Old Sheet2-derived profile field. */
   procedureProfile?: CustomerProfile;
   /**
    * Raw unit counts and percentages used to derive procedureProfile.

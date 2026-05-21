@@ -1,4 +1,4 @@
-// lib/import/sheet2Parser.ts — Parse Sheet2 (product family breakdown) and derive CustomerProfile.
+// lib/import/sheet2Parser.ts — Parse Sheet2 (product family breakdown) and derive DocType.
 //
 // Sheet2 format: multi-row per customer. Customer name only on first row of each block.
 // Columns: Customer, Product Family, Obligo/Credit, State, Qty, Sales $, Pareto Sales, ...
@@ -9,18 +9,24 @@
 //   RA group   : Zygomatic Implant, Zygoma Drills, IMPLANTS PTERYFIT
 //   TUFF group : Tuff, Tuff Pro Implant, Implants Tuff UniCon, Unicon Family
 //   Other impl : MBI Implant, MBI N/C Implant, Mono Bendable, Mono Implants, Multi Unit
-//   Tools/supply: everything else — ignored for profile classification
+//   Tools/supply: everything else — ignored for classification
 //
-// Classification (majority-based, ratio-driven):
-//   everything — TUFF + RA both present, neither a clear majority (raFraction 15%–80%)
-//   full_arch  — TUFF dominant, RA is only a couple (raFraction < 15%)
-//   ra_only    — RA dominant, TUFF is only a handful (raFraction > 80%)
-//   other      — Other implants only, no meaningful TUFF or RA
-//   tools_only — Only tools/supplies, no implants at all
-//   new        — No Sheet2 data
+// REVAMP v2.0 doc-type rules (evaluated in order):
+//   1. No implant units at all (only tools/courses/supplies)        → "other"
+//   2. RA + TUFF both present:
+//        raFraction >= 0.80                                          → "ra_only"
+//        raFraction <= 0.15                                          → "full_arch"
+//        otherwise (meaningful mix, neither dominates)               → "full_arch_ra"
+//   3. TUFF only, no RA                                              → "full_arch"
+//   4. RA only, no TUFF                                              → "ra_only"
+//   5. Only Other implants (MBI/Mono/Multi Unit), no TUFF/RA         → "singles"
+//
+// "everything" is reserved for the heaviest mixed accounts. The classifier
+// never auto-outputs it — Spencer assigns it manually (or via future threshold
+// tuning on stored profileRatios).
 
 import Papa from "papaparse";
-import type { CustomerProfile } from "@/types";
+import type { DocType } from "@/types";
 
 // ── Product family classification sets ────────────────────────────────────────
 // Keys are in LOWERCASE SANITIZED FORM — exactly as stored in Firebase after
@@ -60,10 +66,10 @@ const OTHER_IMPLANT_FAMILIES = new Set([
 // Everything else is treated as tools/supplies and ignored for profile classification.
 
 // ── Thresholds (stored as ratios for Spencer to audit/tune) ───────────────────
-// raFraction = raUnits / (tuffUnits + raUnits)
-//   > 0.80 → ra_only   (RA dominant, handful of TUFFs)
-//   < 0.15 → full_arch (TUFF dominant, only a couple RA)
-//   else   → everything (both meaningful)
+// raFraction = raUnits / (tuffUnits + raUnits), only when BOTH > 0
+//   >= 0.80 → ra_only       (RA dominant, handful of TUFFs)
+//   <= 0.15 → full_arch     (TUFF dominant, only a couple RA)
+//   else    → full_arch_ra  (both meaningful — the mixed bucket)
 const RA_ONLY_THRESHOLD = 0.80;
 const FULL_ARCH_THRESHOLD = 0.15;
 
@@ -91,8 +97,8 @@ export interface CustomerProductSummary {
   state: string;
   /** Per-family obligo totals: { "Zygomatic_Implant": { qty: 2, sales: 14000 }, ... } */
   productFamilyBreakdown: ProductFamilyBreakdown;
-  /** Derived procedure profile from new majority-based TUFF/RA logic */
-  profile: CustomerProfile;
+  /** Derived doc-type from REVAMP v2.0 TUFF/RA majority logic */
+  docType: DocType;
   /** Raw unit counts and percentages for auditing/threshold tuning */
   profileRatios: ProfileRatios;
 }
@@ -125,15 +131,16 @@ function normalizeFamily(raw: string): string {
     .trim();
 }
 
-// ── Profile derivation ────────────────────────────────────────────────────────
+// ── Doc-type derivation ───────────────────────────────────────────────────────
 
 /**
- * Derive CustomerProfile and ProfileRatios from per-family qty breakdown.
+ * Derive DocType and ProfileRatios from per-family qty breakdown.
  * Uses obligo qty only (credit rows are stripped at parse time).
+ * See REVAMP_SPEC v2.0 — never auto-outputs "everything" (reserved for manual assignment).
  */
-function deriveProfileAndRatios(
+export function deriveDocTypeAndRatios(
   breakdown: ProductFamilyBreakdown
-): { profile: CustomerProfile; profileRatios: ProfileRatios } {
+): { docType: DocType; profileRatios: ProfileRatios } {
   let tuffUnits = 0;
   let raUnits = 0;
   let otherUnits = 0;
@@ -158,32 +165,29 @@ function deriveProfileAndRatios(
 
   const profileRatios: ProfileRatios = { tuffUnits, raUnits, otherUnits, tuffPct, raPct, otherPct };
 
-  let profile: CustomerProfile;
+  let docType: DocType;
 
   if (totalClinical === 0) {
-    // No implants at all — only tools/supplies or empty breakdown
-    profile = "tools_only";
-  } else if (tuffUnits === 0 && raUnits === 0) {
-    // Other implants only (MBI/Mono/Multi Unit) — no TUFF or RA
-    profile = "other";
+    // Rule 1: No implant units at all — tools / courses / supplies only.
+    docType = "other";
+  } else if (tuffUnits > 0 && raUnits > 0) {
+    // Rule 2: RA + TUFF both present — split by majority.
+    const raFraction = raUnits / (tuffUnits + raUnits);
+    if (raFraction >= RA_ONLY_THRESHOLD)        docType = "ra_only";
+    else if (raFraction <= FULL_ARCH_THRESHOLD) docType = "full_arch";
+    else                                        docType = "full_arch_ra";
+  } else if (tuffUnits > 0) {
+    // Rule 3: TUFF only.
+    docType = "full_arch";
+  } else if (raUnits > 0) {
+    // Rule 4: RA only.
+    docType = "ra_only";
   } else {
-    // Has at least some TUFF or RA units — apply majority rule
-    const tuffPlusRa = tuffUnits + raUnits;
-    const raFraction = tuffPlusRa > 0 ? raUnits / tuffPlusRa : 0;
-
-    if (raFraction >= RA_ONLY_THRESHOLD) {
-      // RA is overwhelming majority — a handful of TUFFs doesn't change the picture
-      profile = "ra_only";
-    } else if (raFraction <= FULL_ARCH_THRESHOLD) {
-      // TUFF is overwhelming majority — only a couple RA units
-      profile = "full_arch";
-    } else {
-      // Both TUFF and RA are meaningfully present
-      profile = "everything";
-    }
+    // Rule 5: Only Other implants (MBI / Mono / Multi Unit), no TUFF / RA.
+    docType = "singles";
   }
 
-  return { profile, profileRatios };
+  return { docType, profileRatios };
 }
 
 // ── Shared row processor ──────────────────────────────────────────────────────
@@ -191,7 +195,7 @@ function deriveProfileAndRatios(
 /**
  * Apply one parsed CSV row to the running customer state.
  * Mutates `summaries` and returns the (possibly updated) `current` customer.
- * Note: profile/profileRatios are placeholder until finalizeProfiles() is called.
+ * Note: docType/profileRatios are placeholder until finalizeDocTypes() is called.
  */
 function applyRow(
   row: Record<string, string>,
@@ -210,7 +214,7 @@ function applyRow(
       customerName: rawCustomer,
       state,
       productFamilyBreakdown: {},
-      profile: "new",
+      docType: "other",
       profileRatios: { tuffUnits: 0, raUnits: 0, otherUnits: 0, tuffPct: 0, raPct: 0, otherPct: 0 },
     };
   }
@@ -226,7 +230,7 @@ function applyRow(
 
   // Accumulate qty + sales per family.
   // Key is sanitized for Firebase (no . # $ [ ] /); normalizeFamily() reverses
-  // sanitization so deriveProfileAndRatios() still matches the known family sets.
+  // sanitization so deriveDocTypeAndRatios() still matches the known family sets.
   const familyKey = sanitizeFamilyKey(rawFamily);
   const qty   = parseCellNumber(row["Qty"]);
   const sales = parseCellNumber(row["Sales $"]);
@@ -247,10 +251,10 @@ function parseCellNumber(raw: string | undefined): number {
   return isFinite(n) ? n : 0;
 }
 
-function finalizeProfiles(summaries: CustomerProductSummary[]): void {
+function finalizeDocTypes(summaries: CustomerProductSummary[]): void {
   for (const summary of summaries) {
-    const { profile, profileRatios } = deriveProfileAndRatios(summary.productFamilyBreakdown);
-    summary.profile = profile;
+    const { docType, profileRatios } = deriveDocTypeAndRatios(summary.productFamilyBreakdown);
+    summary.docType = docType;
     summary.profileRatios = profileRatios;
   }
 }
@@ -269,7 +273,7 @@ export function parseSheet2(csvText: string): CustomerProductSummary[] {
   let current: CustomerProductSummary | null = null;
   for (const row of data) current = applyRow(row, summaries, current);
   if (current) summaries.push(current);
-  finalizeProfiles(summaries);
+  finalizeDocTypes(summaries);
   return summaries;
 }
 
@@ -318,7 +322,7 @@ export function parseSheet2Async(
 
       complete() {
         if (current) summaries.push(current);
-        finalizeProfiles(summaries);
+        finalizeDocTypes(summaries);
         onProgress?.(estimatedTotal, estimatedTotal);
         resolve(summaries);
       },

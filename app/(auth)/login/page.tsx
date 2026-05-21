@@ -98,29 +98,37 @@ export default function LoginPage() {
   if (authLoading) return null;
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       <div className="w-full max-w-md">
         {/* Branding */}
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold tracking-tight">Noris Medical</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Sales Forecast · Select your name to sign in
+          <div className="inline-flex items-center gap-2 mb-2">
+            <span className="h-2 w-2 rounded-full bg-[color:var(--noris)]" />
+            <span className="text-[11px] uppercase tracking-[0.18em] text-[color:var(--muted-spec)]">
+              Noris Medical
+            </span>
+          </div>
+          <h1 className="text-[22px] font-semibold tracking-tight text-[color:var(--text-spec)]">
+            Sales Forecast
+          </h1>
+          <p className="mt-1 text-[12px] text-[color:var(--muted-spec)]">
+            Select your name to sign in.
           </p>
         </div>
 
         {/* User grid */}
         {usersLoading ? (
           <div className="py-10 text-center">
-            <div className="mx-auto h-5 w-5 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600" />
+            <div className="mx-auto h-5 w-5 animate-spin rounded-full border-2 border-[color:var(--border-spec)] border-t-[color:var(--noris)]" />
           </div>
         ) : users.length === 0 ? (
-          <div className="rounded-lg border border-dashed p-8 text-center">
-            <p className="text-sm text-muted-foreground">
+          <div className="rounded-xl border border-dashed border-[color:var(--border-spec)] p-8 text-center">
+            <p className="text-[13px] text-[color:var(--muted-spec)]">
               No users configured yet.
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Add users via Firebase Console (Auth + Realtime DB) and make sure
-              /forecast_v1/users is publicly readable.
+            <p className="mt-1 text-[11px] text-[color:var(--muted-spec)]/70">
+              Add users via Firebase Console and make sure /forecast_v1/users is
+              publicly readable.
             </p>
           </div>
         ) : (
@@ -128,7 +136,7 @@ export default function LoginPage() {
             {users.map((u) => (
               <button
                 key={u.id}
-                className="rounded-lg border bg-white px-4 py-3.5 text-sm font-medium text-left hover:bg-zinc-50 hover:border-zinc-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900"
+                className="rounded-lg border border-[color:var(--border-spec)] bg-[color:var(--surface)] px-4 py-3.5 text-[13px] font-medium text-left text-[color:var(--text-spec)] hover:border-[color:var(--noris)]/50 hover:bg-[color:var(--surface-2)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--noris)]"
                 onClick={() => {
                   setSelected(u);
                   setEmail("");

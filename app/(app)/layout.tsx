@@ -1,22 +1,16 @@
 // app/(app)/layout.tsx — Authenticated shell. Redirects to /login if not signed in.
-// Client component required for useAuth() hook and router redirect.
+//
+// REVAMP v2.0: slim ~58px sticky topbar — brand left, role-scoped nav center,
+// month label + user/sign-out right. Dark palette throughout.
 
 "use client";
 
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import {
-  LayoutDashboard,
-  Users,
-  Globe,
-  Settings,
-  LogOut,
-  BarChart3,
-} from "lucide-react";
+import { format } from "date-fns";
 import { useAuth, signOut } from "@/lib/firebase/auth";
 import { isAdmin, isManager, isVP } from "@/lib/permissions/roles";
-import { Button } from "@/components/ui/button";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -31,45 +25,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600" />
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-[color:var(--border-spec)] border-t-[color:var(--noris)]" />
       </div>
     );
   }
 
-  if (!user || !appUser) return null; // awaiting redirect
+  if (!user || !appUser) return null;
 
   const navLinks = [
-    {
-      href: "/dashboard",
-      label: "Dashboard",
-      icon: LayoutDashboard,
-      show: true,
-    },
-    {
-      href: "/team",
-      label: "Team",
-      icon: Users,
-      show: isManager(appUser) || isVP(appUser) || isAdmin(appUser),
-    },
-    {
-      href: "/region",
-      label: "Region",
-      icon: Globe,
-      show: isVP(appUser) || isAdmin(appUser),
-    },
-    {
-      href: "/customers",
-      label: "Customers",
-      icon: BarChart3,
-      show: true,
-    },
-    {
-      href: "/admin",
-      label: "Admin",
-      icon: Settings,
-      show: isAdmin(appUser),
-    },
+    { href: "/dashboard", label: "Dashboard", show: true },
+    { href: "/team",      label: "Team",      show: isManager(appUser) || isVP(appUser) || isAdmin(appUser) },
+    { href: "/region",    label: "Region",    show: isVP(appUser) || isAdmin(appUser) },
+    { href: "/admin",     label: "Admin",     show: isAdmin(appUser) },
   ].filter((l) => l.show);
 
   async function handleSignOut() {
@@ -77,30 +45,38 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     router.replace("/login");
   }
 
+  const monthLabel = format(new Date(), "MMMM yyyy");
+
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-50">
-      <header className="sticky top-0 z-40 border-b bg-white">
-        <div className="flex h-12 items-center justify-between px-6">
+    <div className="min-h-screen flex flex-col">
+      {/* ── Slim sticky topbar — ~58px, dark surface ─────────────────────── */}
+      <header className="sticky top-0 z-40 border-b border-[color:var(--border-spec)] bg-[color:var(--surface)]/95 backdrop-blur supports-[backdrop-filter]:bg-[color:var(--surface)]/80">
+        <div className="grid grid-cols-3 items-center h-[58px] px-[22px]">
           {/* Brand + nav */}
-          <div className="flex items-center gap-6">
-            <span className="text-sm font-semibold tracking-tight">
+          <div className="flex items-center gap-6 min-w-0">
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 text-[13px] font-semibold tracking-tight text-[color:var(--text-spec)] whitespace-nowrap"
+            >
+              <span
+                className="h-2 w-2 rounded-full bg-[color:var(--noris)]"
+                aria-hidden
+              />
               Noris Forecast
-            </span>
-            <nav className="flex items-center gap-0.5">
-              {navLinks.map(({ href, label, icon: Icon }) => {
-                const active =
-                  pathname === href || pathname.startsWith(href + "/");
+            </Link>
+            <nav className="flex items-center gap-1 min-w-0">
+              {navLinks.map(({ href, label }) => {
+                const active = pathname === href || pathname.startsWith(href + "/");
                 return (
                   <Link
                     key={href}
                     href={href}
-                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors ${
+                    className={`rounded-md px-2.5 py-1 text-[12px] transition-colors ${
                       active
-                        ? "bg-zinc-100 font-medium text-zinc-900"
-                        : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900"
+                        ? "bg-[color:var(--surface-2)] text-[color:var(--text-spec)] font-medium"
+                        : "text-[color:var(--muted-spec)] hover:text-[color:var(--text-spec)] hover:bg-[color:var(--surface-2)]/60"
                     }`}
                   >
-                    <Icon size={14} />
                     {label}
                   </Link>
                 );
@@ -108,18 +84,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </nav>
           </div>
 
-          {/* User + sign out */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">{appUser.name}</span>
-            <Button
-              variant="ghost"
-              size="sm"
+          {/* Month label center */}
+          <div className="text-center text-[12px] uppercase tracking-[0.08em] text-[color:var(--muted-spec)] tabular-nums">
+            {monthLabel}
+          </div>
+
+          {/* User + sign-out */}
+          <div className="flex items-center justify-end gap-3">
+            <span className="text-[12px] text-[color:var(--muted-spec)]">
+              {appUser.name}
+            </span>
+            <button
               onClick={handleSignOut}
-              className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+              className="text-[11px] text-[color:var(--muted-spec)] hover:text-[color:var(--text-spec)] transition-colors"
             >
-              <LogOut size={12} />
               Sign out
-            </Button>
+            </button>
           </div>
         </div>
       </header>

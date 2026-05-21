@@ -109,7 +109,7 @@ export function CsvImporter() {
 
       const profileBreakdown: Record<string, number> = {};
       for (const s of summaries) {
-        profileBreakdown[s.profile] = (profileBreakdown[s.profile] ?? 0) + 1;
+        profileBreakdown[s.docType] = (profileBreakdown[s.docType] ?? 0) + 1;
       }
 
       let repNameMap: Record<string, string> | undefined;
