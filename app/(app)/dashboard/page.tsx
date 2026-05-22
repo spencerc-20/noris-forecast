@@ -15,6 +15,7 @@ import { MetricCards } from "@/components/rep/MetricCards";
 import { RepListFilters } from "@/components/rep/RepListFilters";
 import { RepList } from "@/components/rep/RepList";
 import { SaveStatusBadge } from "@/components/rep/SaveStatusBadge";
+import { AddToPipelineModal } from "@/components/rep/AddToPipelineModal";
 import type { Customer, DocType, PipelineType } from "@/types";
 import type { EditableField, FieldValue } from "@/components/rep/RepListRow";
 
@@ -38,6 +39,9 @@ export default function DashboardPage() {
   const [search, setSearch] = useState("");
   const [pipelineFilter, setPipelineFilter] = useState<PipelineType | null>(null);
   const [docTypeFilter, setDocTypeFilter] = useState<DocType | null>(null);
+
+  // "+ Add to pipeline" modal
+  const [addOpen, setAddOpen] = useState(false);
 
   // ── Live customer subscription ─────────────────────────────────────────────
   useEffect(() => {
@@ -87,9 +91,52 @@ export default function DashboardPage() {
     );
   };
 
+  /**
+   * Step 4 — NEW row closes → convert to EXISTING recurring account.
+   *
+   * The closed-deal dollar amount (whichever of expectedMonthlyTotal × close% we
+   * trust most — we use the rep's explicit expectedMonthlyTotal, since that's
+   * what "they expect to close this month") seeds the customer's expectedMonthly
+   * baseline. The same dollar amount also lands in actualThisMonth so the
+   * month's "existing actual" total reflects the close immediately.
+   *
+   * After the swap the row renders with the EXISTING column layout — on-track
+   * starts at 100% (actual === expected).
+   */
+  const handleCloseConversion = (customer: Customer) => {
+    const closedAmount = customer.expectedMonthlyTotal ?? 0;
+    const patch: Partial<Customer> = {
+      pipelineType: "existing",
+      newStatus: "closed",
+      expectedMonthly: closedAmount,
+      actualThisMonth: closedAmount,
+      // Clear the now-meaningless new-pipeline fields.
+      expectedMonthlyTotal: 0,
+      closeProbability: 0,
+    };
+
+    // Queue the multi-field patch through the same autosave path so the badge fires.
+    const existing = pendingRef.current.get(customer.id) ?? {};
+    pendingRef.current.set(customer.id, { ...existing, ...patch });
+    requestSave(pendingRef.current);
+
+    setCustomers((prev) =>
+      prev.map((c) => (c.id === customer.id ? ({ ...c, ...patch } as Customer) : c))
+    );
+  };
+
+  // ── Pipeline membership gate ───────────────────────────────────────────────
+  // Only customers the rep has explicitly added to this month's pipeline show up.
+  // CSV-imported background customers stay invisible until the rep promotes them
+  // via the "+ Add to pipeline" flow.
+  const inPipelineCustomers = useMemo(
+    () => customers.filter((c) => c.inPipeline === true),
+    [customers]
+  );
+
   // ── Filter + sort ──────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
-    let list = customers;
+    let list = inPipelineCustomers;
     if (search) {
       const q = search.toLowerCase();
       list = list.filter(
@@ -101,7 +148,7 @@ export default function DashboardPage() {
     if (pipelineFilter) list = list.filter((c) => c.pipelineType === pipelineFilter);
     if (docTypeFilter)  list = list.filter((c) => c.docType === docTypeFilter);
     return list.slice().sort((a, b) => a.name.localeCompare(b.name));
-  }, [customers, search, pipelineFilter, docTypeFilter]);
+  }, [inPipelineCustomers, search, pipelineFilter, docTypeFilter]);
 
   // ── Metrics (computed over the FILTERED view so they react to the chips) ───
   const metrics = useMemo(() => calcRepMetrics(filtered), [filtered]);
@@ -112,7 +159,7 @@ export default function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-[1300px] px-[22px] py-7 space-y-5">
-      {/* Page header — name on the left, autosave status on the right */}
+      {/* Page header — name on the left, autosave status + add button on the right */}
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-[18px] font-semibold text-[color:var(--text-spec)] leading-tight">
@@ -122,7 +169,15 @@ export default function DashboardPage() {
             {monthLabel}
           </p>
         </div>
-        <SaveStatusBadge status={status} errorMessage={errorMessage} />
+        <div className="flex items-center gap-3">
+          <SaveStatusBadge status={status} errorMessage={errorMessage} />
+          <button
+            onClick={() => setAddOpen(true)}
+            className="rounded-md bg-[color:var(--noris)] text-white px-2.5 py-1.5 text-[12px] font-medium hover:bg-[color:var(--noris)]/90 transition-colors"
+          >
+            + Add to pipeline
+          </button>
+        </div>
       </div>
 
       <MetricCards metrics={metrics} />
@@ -144,9 +199,18 @@ export default function DashboardPage() {
         <RepList
           customers={filtered}
           onFieldChange={handleFieldChange}
-          totalCount={customers.length}
+          totalCount={inPipelineCustomers.length}
+          onCloseConversion={handleCloseConversion}
         />
       )}
+
+      <AddToPipelineModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        ownerId={appUser.id}
+        region={appUser.region}
+        inPipelineIds={new Set(inPipelineCustomers.map((c) => c.id))}
+      />
     </div>
   );
 }

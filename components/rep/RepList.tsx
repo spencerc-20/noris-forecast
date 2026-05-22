@@ -15,15 +15,21 @@ import { RepListRow } from "./RepListRow";
 interface RepListProps {
   customers: Customer[];
   onFieldChange: (customerId: string, field: EditableField, value: FieldValue) => void;
+  /** Total customers in the pipeline (pre-filter) — drives the footer count. */
   totalCount: number;
+  /** Called when a NEW row's status moves to "Closed" — page handles the conversion. */
+  onCloseConversion?: (customer: Customer) => void;
 }
 
-const GRID = "grid grid-cols-[2fr_90px_140px_120px_120px_140px] gap-3";
+// Matches the 7-col grid in RepListRow exactly.
+const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px] gap-3";
 
-export function RepList({ customers, onFieldChange, totalCount }: RepListProps) {
+export function RepList({ customers, onFieldChange, totalCount, onCloseConversion }: RepListProps) {
   return (
     <div className="rounded-xl border border-[color:var(--border-spec)] bg-[color:var(--surface)] overflow-hidden">
-      {/* Header row — darker bg, uppercase 10px labels */}
+      {/* Header row — darker bg, uppercase 10px labels. Column 5/6 labels read
+          as the union of New and Existing semantics; the row itself shows the
+          right widget based on pipelineType. */}
       <div
         className={`${GRID} px-4 py-2.5 border-b border-[color:var(--border-spec)] bg-[#0d1525] text-[10px] uppercase tracking-[0.1em] font-medium text-[color:var(--muted-spec)]`}
       >
@@ -32,16 +38,24 @@ export function RepList({ customers, onFieldChange, totalCount }: RepListProps) 
         <div>Doc-type</div>
         <div className="text-right">Expected $</div>
         <div className="text-right">Close % / Actual $</div>
-        <div className="text-right">Projected / On track</div>
+        <div>Status</div>
+        <div className="text-right">Weighted / On track</div>
       </div>
 
       {customers.length === 0 ? (
         <div className="py-10 text-center text-[13px] text-[color:var(--muted-spec)]">
-          {totalCount === 0 ? "No customers yet." : "No customers match this filter."}
+          {totalCount === 0
+            ? "Your pipeline is empty. Click + Add to pipeline to start."
+            : "No customers match this filter."}
         </div>
       ) : (
         customers.map((c) => (
-          <RepListRow key={c.id} customer={c} onFieldChange={onFieldChange} />
+          <RepListRow
+            key={c.id}
+            customer={c}
+            onFieldChange={onFieldChange}
+            onCloseConversion={onCloseConversion}
+          />
         ))
       )}
 

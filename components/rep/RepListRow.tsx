@@ -1,15 +1,17 @@
 // components/rep/RepListRow.tsx — Single editable row in the unified rep list.
 //
-// REVAMP v2.0 styling — the spec's signature interaction:
-//   "Inline editable cells — inputs are transparent until hover (border appears)
-//    / focus (accent border + dark bg). No separate edit mode. Type → it saves."
+// REVAMP v2.0 + pipeline-fixes Step 3: NEW and EXISTING rows now show
+// fundamentally different columns:
 //
-// We implement that exactly: every input is transparent by default, gets a faint
-// border on hover, and an accent (Noris red) border plus a darker fill on focus.
+//   NEW row     │ Customer │ Type │ Doc-type │ Expected $ │ Close %  │ Status     │ Weighted (ro)
+//   EXISTING    │ Customer │ Type │ Doc-type │ Expected $ │ Actual $ │ —          │ On-track %  (ro)
 //
-// Behaviour (unchanged from Step 3):
-//   - NEW rows  → expectedMonthlyTotal, closeProbability, weightedTotal (computed)
-//   - EXISTING  → expectedMonthly, actualThisMonth, on-track %     (computed)
+// The 5th column is fundamentally different ($ for existing vs % for new), the
+// 6th column is the new "Status" dropdown for new rows (Step 4) or blank for
+// existing, and the 7th column is the read-only computed metric.
+//
+// Number inputs render their unit symbol as a SUFFIX inside the same cell so
+// the value stays right-aligned and the symbol stays visually attached.
 
 "use client";
 
@@ -30,16 +32,20 @@ export type EditableField =
   | "expectedMonthlyTotal"
   | "closeProbability"
   | "expectedMonthly"
-  | "actualThisMonth";
+  | "actualThisMonth"
+  | "newStatus"
+  | "inPipeline";
 
 export type FieldValue = string | number | boolean | null;
 
 interface RepListRowProps {
   customer: Customer;
   onFieldChange: (customerId: string, field: EditableField, value: FieldValue) => void;
+  /** Called when the rep moves a NEW row to "Closed" — converts to EXISTING. */
+  onCloseConversion?: (customer: Customer) => void;
 }
 
-// ── Status colour map (text + chip backgrounds) ──────────────────────────────
+// ── Colour map ──────────────────────────────────────────────────────────────
 
 const ON_TRACK_TEXT: Record<ReturnType<typeof onTrackStatusFor>, string> = {
   on_track: "text-[color:var(--good)]",
@@ -51,23 +57,28 @@ const ON_TRACK_TEXT: Record<ReturnType<typeof onTrackStatusFor>, string> = {
 // ── Cell primitives ──────────────────────────────────────────────────────────
 
 /**
- * Transparent-until-hover numeric cell. The "border appears" / "accent border
- * on focus" interaction is achieved with Tailwind border colour transitions.
+ * Transparent-until-hover numeric cell. The unit symbol ("$" or "%") sits
+ * INSIDE the input box as a suffix so the value and its unit stay visually
+ * joined no matter how wide the cell is.
  */
 function NumberCell({
   value,
   onCommit,
-  prefix,
+  unit,
   placeholder = "—",
+  max,
+  min,
 }: {
   value: number | undefined;
   onCommit: (parsed: number) => void;
-  prefix?: string;
+  /** "$" rendered as prefix; "%" rendered as suffix. */
+  unit: "$" | "%";
   placeholder?: string;
+  max?: number;
+  min?: number;
 }) {
   const [draft, setDraft] = useState<string>(value != null ? String(value) : "");
 
-  // Re-sync if the upstream value moves (e.g. another tab editing the same customer).
   useEffect(() => {
     setDraft(value != null ? String(value) : "");
   }, [value]);
@@ -75,37 +86,52 @@ function NumberCell({
   const commit = () => {
     const cleaned = draft.replace(/[^0-9.\-]/g, "");
     const parsed = parseFloat(cleaned);
-    const next = isFinite(parsed) ? parsed : 0;
+    let next = isFinite(parsed) ? parsed : 0;
+    if (min != null) next = Math.max(min, next);
+    if (max != null) next = Math.min(max, next);
     if (next !== (value ?? 0)) onCommit(next);
   };
 
+  // One unified pill: transparent border until hover, accent on focus.
+  // Prefix ($) on the left, suffix (%) on the right — both muted.
   return (
-    <div className="flex items-center justify-end gap-1 group">
-      {prefix && (
-        <span className="text-[11px] text-[color:var(--muted-spec)]">{prefix}</span>
+    <label
+      className="
+        group inline-flex items-center justify-end gap-0.5
+        border border-transparent rounded-md px-1.5 py-0.5 w-full
+        transition-colors cursor-text
+        hover:border-[color:var(--border-spec)]
+        focus-within:border-[color:var(--noris)]
+        focus-within:bg-[color:var(--surface-2)]
+      "
+    >
+      {unit === "$" && (
+        <span className="text-[11px] text-[color:var(--muted-spec)] select-none">$</span>
       )}
       <input
         value={draft}
         placeholder={placeholder}
+        inputMode="decimal"
         onChange={(e) => {
           setDraft(e.target.value);
           const cleaned = e.target.value.replace(/[^0-9.\-]/g, "");
           const parsed = parseFloat(cleaned);
-          onCommit(isFinite(parsed) ? parsed : 0);
+          let next = isFinite(parsed) ? parsed : 0;
+          if (min != null) next = Math.max(min, next);
+          if (max != null) next = Math.min(max, next);
+          onCommit(next);
         }}
         onBlur={commit}
         className="
-          w-20 text-right tabular-nums text-[13px] bg-transparent
-          border border-transparent rounded-md px-1.5 py-0.5
+          flex-1 min-w-0 text-right tabular-nums text-[13px] bg-transparent
+          border-0 outline-none p-0
           text-[color:var(--text-spec)] placeholder:text-[color:var(--muted-spec)]
-          transition-colors
-          group-hover:border-[color:var(--border-spec)]
-          focus:border-[color:var(--noris)]
-          focus:bg-[color:var(--surface-2)]
-          focus:outline-none
         "
       />
-    </div>
+      {unit === "%" && (
+        <span className="text-[11px] text-[color:var(--muted-spec)] select-none">%</span>
+      )}
+    </label>
   );
 }
 
@@ -126,7 +152,7 @@ function DocTypeCell({
           : "Auto-derived from Sheet 2 unit mix"
       }
       className="
-        text-[12px] bg-transparent border border-transparent rounded-md
+        w-full text-[12px] bg-transparent border border-transparent rounded-md
         px-1.5 py-0.5 cursor-pointer
         text-[color:var(--text-spec)]
         transition-colors
@@ -168,11 +194,51 @@ function PipelineCell({
   );
 }
 
+/** "Prospecting" / "Closed" status dropdown on NEW rows. */
+function NewStatusCell({
+  customer,
+  onChange,
+}: {
+  customer: Customer;
+  onChange: (next: "prospecting" | "closed") => void;
+}) {
+  const status = customer.newStatus ?? "prospecting";
+  return (
+    <select
+      value={status}
+      onChange={(e) => onChange(e.target.value as "prospecting" | "closed")}
+      className="
+        w-full text-[12px] bg-transparent border border-transparent rounded-md
+        px-1.5 py-0.5 cursor-pointer
+        text-[color:var(--text-spec)]
+        transition-colors
+        hover:border-[color:var(--border-spec)]
+        focus:border-[color:var(--noris)]
+        focus:bg-[color:var(--surface-2)]
+        focus:outline-none
+      "
+      title={
+        status === "closed"
+          ? "Closed — picking this will convert the row to an EXISTING recurring account"
+          : "In active prospecting"
+      }
+    >
+      <option value="prospecting" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        Prospecting
+      </option>
+      <option value="closed" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        Close → Existing
+      </option>
+    </select>
+  );
+}
+
 // ── Main row ─────────────────────────────────────────────────────────────────
 
-const GRID = "grid grid-cols-[2fr_90px_140px_120px_120px_140px] gap-3";
+// Shared 7-col grid: customer · type · doc-type · expected · prob/actual · status · projected
+const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px] gap-3";
 
-export function RepListRow({ customer, onFieldChange }: RepListRowProps) {
+export function RepListRow({ customer, onFieldChange, onCloseConversion }: RepListRowProps) {
   const isNew = customer.pipelineType === "new";
   const weighted = weightedTotalFor(customer);
   const trackPct = onTrackPctFor(customer);
@@ -192,6 +258,7 @@ export function RepListRow({ customer, onFieldChange }: RepListRowProps) {
         )}
       </div>
 
+      {/* Pipeline type chip */}
       <div>
         <PipelineCell
           customer={customer}
@@ -199,52 +266,77 @@ export function RepListRow({ customer, onFieldChange }: RepListRowProps) {
         />
       </div>
 
+      {/* Doc-type */}
       <div>
         <DocTypeCell
           customer={customer}
           onChange={(next) => {
             onFieldChange(customer.id, "docType", next);
-            // Picking a doc-type by hand pins it so Sheet 2 re-imports don't overwrite.
             onFieldChange(customer.id, "docTypeIsOverride", true);
           }}
         />
       </div>
 
+      {/* Expected $ — same field name (just rep-meaning differs) */}
       <div>
         {isNew ? (
           <NumberCell
             value={customer.expectedMonthlyTotal}
             onCommit={(v) => onFieldChange(customer.id, "expectedMonthlyTotal", v)}
-            prefix="$"
+            unit="$"
+            min={0}
           />
         ) : (
           <NumberCell
             value={customer.expectedMonthly}
             onCommit={(v) => onFieldChange(customer.id, "expectedMonthly", v)}
-            prefix="$"
+            unit="$"
+            min={0}
           />
         )}
       </div>
 
+      {/* Close % (new) or Actual $ (existing) — column 5 */}
       <div>
         {isNew ? (
           <NumberCell
             value={customer.closeProbability}
-            onCommit={(v) => {
-              const clamped = Math.max(0, Math.min(100, v));
-              onFieldChange(customer.id, "closeProbability", clamped);
-            }}
-            prefix="%"
+            onCommit={(v) => onFieldChange(customer.id, "closeProbability", v)}
+            unit="%"
+            min={0}
+            max={100}
           />
         ) : (
           <NumberCell
             value={customer.actualThisMonth}
             onCommit={(v) => onFieldChange(customer.id, "actualThisMonth", v)}
-            prefix="$"
+            unit="$"
+            min={0}
           />
         )}
       </div>
 
+      {/* Status — only NEW rows show the Prospecting / Closed dropdown */}
+      <div>
+        {isNew ? (
+          <NewStatusCell
+            customer={customer}
+            onChange={(next) => {
+              if (next === "closed" && onCloseConversion) {
+                onCloseConversion(customer);
+              } else {
+                onFieldChange(customer.id, "newStatus", next);
+              }
+            }}
+          />
+        ) : (
+          <span className="text-[11px] text-[color:var(--muted-spec)] tabular-nums pl-1.5">
+            recurring
+          </span>
+        )}
+      </div>
+
+      {/* Projected / On-track — read-only computed */}
       <div className="text-right text-[12px] tabular-nums">
         {isNew ? (
           <span className="text-[color:var(--text-spec)]">

@@ -36,9 +36,11 @@ export default function RegionPage() {
   }, [appUser]);
 
   // Build per-region entry lists; also keep an "all customers" totals view.
+  // Only count `inPipeline === true` customers — background records are silent.
   const { regionBlocks, allCustomers } = useMemo(() => {
     const customersByOwner = new Map<string, Customer[]>();
     for (const c of customers) {
+      if (c.inPipeline !== true) continue;
       const arr = customersByOwner.get(c.ownerId) ?? [];
       arr.push(c);
       customersByOwner.set(c.ownerId, arr);
@@ -66,7 +68,9 @@ export default function RegionPage() {
     const allOwnerIds = new Set(
       Object.values(byRegion).flat().map((u) => u.id)
     );
-    const allCustomers = customers.filter((c) => allOwnerIds.has(c.ownerId));
+    const allCustomers = customers.filter(
+      (c) => allOwnerIds.has(c.ownerId) && c.inPipeline === true
+    );
 
     return { regionBlocks, allCustomers };
   }, [byRegion, customers]);

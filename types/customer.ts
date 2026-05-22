@@ -28,6 +28,13 @@ export interface Customer {
 
   // ── REVAMP v2.0 — active classification + forecast fields ──────────────────
 
+  /**
+   * Pipeline membership gate. Only customers with `inPipeline === true`
+   * appear on a rep's dashboard. CSV-imported background customers default
+   * to false; reps explicitly add them via the "+ Add to pipeline" flow.
+   */
+  inPipeline?: boolean;
+
   /** "new" = active prospect (rep is pitching), "existing" = recurring book account. */
   pipelineType: PipelineType;
 
@@ -42,6 +49,12 @@ export interface Customer {
   expectedMonthlyTotal?: number;
   /** % likelihood the new-pipeline deal actually closes this month (0–100). */
   closeProbability?: number;
+  /**
+   * NEW-row workflow status. "prospecting" is the default. Moving to "closed"
+   * converts the row into an EXISTING recurring account — see Step 4 logic in
+   * the dashboard `handleStatusChange`.
+   */
+  newStatus?: "prospecting" | "closed";
 
   // EXISTING-recurring fields (used when pipelineType === "existing")
   /** Customer's normal monthly run-rate. Rep-entered baseline. */

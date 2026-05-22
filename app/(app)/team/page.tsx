@@ -56,9 +56,13 @@ export default function TeamPage() {
   }, [appUser]);
 
   // ── Roll up rep entries ─────────────────────────────────────────────────────
+  // Only `inPipeline === true` customers count — background CSV records would
+  // otherwise inflate the totals with phantom pipeline.
   const { entries, regionCustomers } = useMemo(() => {
     const repIds = new Set(reps.map((r) => r.id));
-    const regionCustomers = customers.filter((c) => repIds.has(c.ownerId));
+    const regionCustomers = customers.filter(
+      (c) => repIds.has(c.ownerId) && c.inPipeline === true
+    );
     const byRep = new Map<string, Customer[]>();
     for (const c of regionCustomers) {
       const arr = byRep.get(c.ownerId) ?? [];

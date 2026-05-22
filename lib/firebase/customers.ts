@@ -108,7 +108,12 @@ export type CustomerCreateData = Omit<
   | "profileUpdatedAt"
   | "pipelineType"
   | "docType"
->;
+> & {
+  /** Optional — defaults to "new" for fresh CSV-imported records. */
+  pipelineType?: Customer["pipelineType"];
+  /** Optional — defaults to "other" until Sheet 2 derivation runs. */
+  docType?: Customer["docType"];
+};
 
 /** Create a new customer. Auto-assigns region from state if region is empty. */
 export async function createCustomer(
@@ -121,10 +126,9 @@ export async function createCustomer(
   const customerData: Omit<Customer, "id"> = {
     ...data,
     region,
-    // REVAMP v2.0 defaults — every customer starts as a NEW prospect with no clinical
-    // classification. docType becomes meaningful once Sheet 2 data lands or the rep picks it.
-    pipelineType: "new",
-    docType: "other",
+    // REVAMP v2.0 defaults — caller can override either by passing the field.
+    pipelineType: data.pipelineType ?? "new",
+    docType:      data.docType      ?? "other",
     // Legacy deal-era fields kept here so reads against pre-revamp data don't 404
     // on missing keys. The UI no longer surfaces these.
     commissionStatus: {},

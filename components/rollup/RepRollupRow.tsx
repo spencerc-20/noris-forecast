@@ -91,8 +91,8 @@ export function RepRollupRow({ repName, region, customers }: RepRollupRowProps) 
                 <div>Type</div>
                 <div>Doc-type</div>
                 <div className="text-right">Expected $</div>
-                <div className="text-right">Close % / Actual</div>
-                <div className="text-right">Projected / On track</div>
+                <div className="text-right">Close % / Actual $</div>
+                <div className="text-right">Weighted / On track</div>
               </div>
               {customers
                 .slice()
