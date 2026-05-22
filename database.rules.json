@@ -1,0 +1,34 @@
+{
+  "//": "Firebase Realtime Database rules. Deploy with `firebase deploy --only database` (after `firebase login` once) OR paste into Firebase Console → Realtime Database → Rules.",
+  "rules": {
+    "forecast_v1": {
+      "users": {
+        ".read": true,
+        ".write": "auth != null",
+        ".indexOn": ["email"]
+      },
+      "customers": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        ".indexOn": ["ownerId"]
+      },
+      "repForecasts": {
+        "//": "Per-rep per-month gut-call forecast: forecast_v1/repForecasts/{repId}/{YYYY-MM} = number",
+        ".read":  "auth != null",
+        ".write": "auth != null"
+      },
+      "imports": {
+        ".read":  "auth != null",
+        ".write": "auth != null"
+      },
+      "loginLog": {
+        ".read":  "auth != null",
+        ".write": "auth != null"
+      },
+      "config": {
+        ".read":  "auth != null",
+        ".write": "auth != null"
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "//": "Firebase project config — only the RTDB rules are managed from this repo.",
+  "database": {
+    "rules": "database.rules.json"
+  }
+}
