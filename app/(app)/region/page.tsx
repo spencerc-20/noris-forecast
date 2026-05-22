@@ -1,29 +1,42 @@
-// app/(app)/region/page.tsx — VP view: every rep across every region.
+// app/(app)/region/page.tsx — Admin/VP region picker.
 //
-// REVAMP v2.0: total roll-up metric cards at the top, then one expandable
-// rollup table per region (alpha-sorted). Same RepRollupRow drilldown as /team.
+// Lists every region as a clickable card with at-a-glance metrics for the
+// selected month. Clicking a card drills into /team?region=X which renders
+// the same regional rollup a Regional Manager sees.
+//
+// Permissions: layout shows this only to VP / Admin. Plain reps + managers
+// don't have the nav link; URL-typing would just render an empty list
+// (Firebase rules enforce the real read boundary).
 
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { ChevronRight } from "lucide-react";
 import { useAuth } from "@/lib/firebase/auth";
 import { getUsersByRegion } from "@/lib/firebase/users";
 import { subscribeToAllCustomers } from "@/lib/firebase/customers";
-import { calcRepMetrics, formatDollars } from "@/lib/forecast/repMetrics";
+import { calcRepMetrics, formatDollars, onTrackStatusFor } from "@/lib/forecast/repMetrics";
 import { currentMonthKey, customerViewedAt, monthLabel } from "@/lib/forecast/monthData";
 import { MetricCards } from "@/components/rep/MetricCards";
-import { RepRollupTable, type RepRollupEntry } from "@/components/rollup/RepRollupTable";
 import type { AppUser, Customer } from "@/types";
+
+const ON_TRACK_TEXT: Record<ReturnType<typeof onTrackStatusFor>, string> = {
+  on_track: "text-[color:var(--good)]",
+  close:    "text-[color:var(--warn)]",
+  behind:   "text-[color:var(--bad)]",
+  unknown:  "text-[color:var(--muted-spec)]",
+};
 
 export default function RegionPage() {
   const { appUser } = useAuth();
   const searchParams = useSearchParams();
   const viewMonth = searchParams.get("month") || currentMonthKey();
 
-  const [byRegion, setByRegion] = useState<Record<string, AppUser[]>>({});
+  const [byRegion, setByRegion]   = useState<Record<string, AppUser[]>>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]     = useState(true);
 
   useEffect(() => {
     if (!appUser) return;
@@ -38,50 +51,37 @@ export default function RegionPage() {
     });
   }, [appUser]);
 
-  // Build per-region entry lists; also keep an "all customers" totals view.
-  // Only count `inPipeline === true` customers — background records are silent.
-  // Each customer is viewed-at-month before being bucketed by owner so the
-  // computed metrics use the right month's expectedMonthly / actualThisMonth.
-  const { regionBlocks, allCustomers } = useMemo(() => {
-    const customersByOwner = new Map<string, Customer[]>();
-    for (const raw of customers) {
-      if (raw.inPipeline !== true) continue;
-      const c = customerViewedAt(raw, viewMonth);
-      const arr = customersByOwner.get(c.ownerId) ?? [];
-      arr.push(c);
-      customersByOwner.set(c.ownerId, arr);
+  // Pre-compute per-region metrics + grand totals.
+  // Only `inPipeline === true` customers are counted; each is viewed at the
+  // selected month so the cards reflect what reps are pitching THIS month.
+  const { regionRows, grandTotals } = useMemo(() => {
+    const regions = Object.keys(byRegion).sort();
+
+    // Map ownerId → region for fast lookup.
+    const ownerRegion = new Map<string, string>();
+    for (const [region, users] of Object.entries(byRegion)) {
+      for (const u of users) ownerRegion.set(u.id, region);
     }
 
-    const regions = Object.keys(byRegion).sort();
-    const regionBlocks = regions.map((regionName) => {
-      const reps = byRegion[regionName] ?? [];
-      const entries: RepRollupEntry[] = reps
-        .map((r) => ({
-          name: r.name,
-          region: regionName,
-          customers: customersByOwner.get(r.id) ?? [],
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-      const regionCustomers = entries.flatMap((e) => e.customers);
-      return {
-        regionName,
-        entries,
-        totals: calcRepMetrics(regionCustomers),
-      };
-    });
-
-    // All customers across all reps (not just unassigned-region ones)
-    const allOwnerIds = new Set(
-      Object.values(byRegion).flat().map((u) => u.id)
-    );
-    const allCustomers = customers
-      .filter((c) => allOwnerIds.has(c.ownerId) && c.inPipeline === true)
+    // Filter once, then bucket by region.
+    const liveCustomers = customers
+      .filter((c) => c.inPipeline === true && ownerRegion.has(c.ownerId))
       .map((c) => customerViewedAt(c, viewMonth));
 
-    return { regionBlocks, allCustomers };
-  }, [byRegion, customers, viewMonth]);
+    const buckets: Record<string, Customer[]> = {};
+    for (const c of liveCustomers) {
+      const r = ownerRegion.get(c.ownerId)!;
+      (buckets[r] ??= []).push(c);
+    }
 
-  const grandTotals = useMemo(() => calcRepMetrics(allCustomers), [allCustomers]);
+    const regionRows = regions.map((region) => ({
+      region,
+      reps: byRegion[region] ?? [],
+      totals: calcRepMetrics(buckets[region] ?? []),
+    }));
+
+    return { regionRows, grandTotals: calcRepMetrics(liveCustomers) };
+  }, [byRegion, customers, viewMonth]);
 
   if (!appUser) return null;
 
@@ -89,48 +89,114 @@ export default function RegionPage() {
   const totalReps = Object.values(byRegion).reduce((sum, list) => sum + list.length, 0);
 
   return (
-    <div className="mx-auto max-w-[1300px] px-[22px] py-7 space-y-6">
+    <div className="mx-auto max-w-[1300px] px-[22px] py-7 space-y-5">
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-[18px] font-semibold text-[color:var(--text-spec)] leading-tight">
             All Regions
           </h1>
           <p className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)] mt-1">
-            {monthDisplay} · {regionBlocks.length} region{regionBlocks.length === 1 ? "" : "s"} · {totalReps} rep{totalReps === 1 ? "" : "s"}
+            {monthDisplay} · {regionRows.length} region{regionRows.length === 1 ? "" : "s"} · {totalReps} rep{totalReps === 1 ? "" : "s"}
           </p>
         </div>
         <span className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)]">
-          Read-only
+          Click a region to drill in
         </span>
       </div>
 
+      {/* Grand-total cards across every region. */}
       <MetricCards metrics={grandTotals} />
 
       {loading ? (
         <div className="flex justify-center py-16">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-[color:var(--border-spec)] border-t-[color:var(--noris)]" />
         </div>
-      ) : regionBlocks.length === 0 ? (
+      ) : regionRows.length === 0 ? (
         <div className="rounded-xl border border-[color:var(--border-spec)] bg-[color:var(--surface)] py-10 text-center text-[13px] text-[color:var(--muted-spec)]">
           No reps configured yet.
         </div>
       ) : (
-        regionBlocks.map((block) => (
-          <div key={block.regionName} className="space-y-2">
-            <div className="flex items-baseline justify-between px-1">
-              <h2 className="text-[13px] font-semibold text-[color:var(--text-spec)]">
-                {block.regionName}
-              </h2>
-              <p className="text-[11px] text-[color:var(--muted-spec)] tabular-nums">
-                Combined {formatDollars(block.totals.combinedForecast)} · {block.entries.length} rep{block.entries.length === 1 ? "" : "s"}
-              </p>
-            </div>
-            <RepRollupTable
-              reps={block.entries}
-              emptyLabel="No reps in this region yet."
-            />
-          </div>
-        ))
+        // Region grid — each card is a Link into /team?region=…
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {regionRows.map(({ region, reps, totals }) => {
+            const trackStatus = onTrackStatusFor(totals.existingOnTrackPct);
+            const trackLabel  = totals.existingOnTrackPct == null ? "—" : `${totals.existingOnTrackPct}%`;
+            return (
+              <Link
+                key={region}
+                href={{ pathname: "/team", query: { region, ...(viewMonth !== currentMonthKey() ? { month: viewMonth } : {}) } }}
+                className="
+                  group block rounded-xl border border-[color:var(--border-spec)]
+                  bg-[color:var(--surface)] px-4 py-3.5
+                  hover:border-[color:var(--noris)]/60 hover:bg-[color:var(--surface-2)]/30
+                  transition-colors
+                "
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="min-w-0">
+                    <p className="text-[14px] font-semibold text-[color:var(--text-spec)] truncate">
+                      {region}
+                    </p>
+                    <p className="text-[11px] text-[color:var(--muted-spec)] tabular-nums mt-0.5">
+                      {reps.length} rep{reps.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <ChevronRight
+                    size={14}
+                    className="text-[color:var(--muted-spec)] group-hover:text-[color:var(--noris)] transition-colors"
+                  />
+                </div>
+
+                {/* Quick at-a-glance rollup. */}
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-[color:var(--muted-spec)]">
+                      Combined
+                    </p>
+                    <p className="text-[15px] font-semibold tabular-nums text-[color:var(--text-spec)] mt-0.5">
+                      {formatDollars(totals.combinedForecast)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-[color:var(--muted-spec)]">
+                      On track
+                    </p>
+                    <p className={`text-[15px] font-semibold tabular-nums mt-0.5 ${ON_TRACK_TEXT[trackStatus]}`}>
+                      {trackLabel}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 mt-3 pt-2.5 border-t border-[color:var(--border-spec)]/60">
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.08em] text-[color:var(--muted-spec)]">
+                      New weighted
+                    </p>
+                    <p className="text-[12px] tabular-nums text-[color:var(--text-spec)] mt-0.5">
+                      {formatDollars(totals.newWeightedTotal)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.08em] text-[color:var(--muted-spec)]">
+                      Existing exp.
+                    </p>
+                    <p className="text-[12px] tabular-nums text-[color:var(--text-spec)] mt-0.5">
+                      {formatDollars(totals.existingExpected)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] uppercase tracking-[0.08em] text-[color:var(--muted-spec)]">
+                      Existing act.
+                    </p>
+                    <p className="text-[12px] tabular-nums text-[color:var(--text-spec)] mt-0.5">
+                      {formatDollars(totals.existingActual)}
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
       )}
     </div>
   );

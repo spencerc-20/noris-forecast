@@ -30,11 +30,25 @@ import type { AppUser } from "@/types";
 const DB_ROOT = "forecast_v1";
 
 /**
- * Sign in using email-as-password scheme.
- * Looks up the user by email first to check the disabled flag, then calls Firebase.
- * Password equals email — this is a deliberate product decision (see README).
+ * Sign in with the given email + optional explicit password.
+ *
+ * REVAMP auth model (post pre-final-details checkpoint):
+ *   - role === "rep"             → password === email (auto, no prompt)
+ *   - role === "manager"         → password === email (rep enters their email)
+ *   - role === "admin"           → password === "Noris!2026" (or whatever the
+ *                                  rep entered in the prompt)
+ *
+ * The caller is responsible for prompting for a password when the role needs
+ * one. If `passwordOverride` is null/undefined we fall back to email-as-password
+ * (the legacy default, still right for reps and current managers).
+ *
+ * Looking up the user by email first lets us cheaply check the `disabled`
+ * flag before burning a Firebase Auth call on a banned account.
  */
-export async function signIn(email: string): Promise<AppUser> {
+export async function signIn(
+  email: string,
+  passwordOverride?: string
+): Promise<AppUser> {
   // 1. Look up user by email to check disabled flag before Firebase call
   const usersQuery = query(
     ref(db, `${DB_ROOT}/users`),
@@ -62,8 +76,9 @@ export async function signIn(email: string): Promise<AppUser> {
     throw new Error("This account is disabled. Contact your admin.");
   }
 
-  // 2. Sign in — password equals email (deliberate product decision)
-  await signInWithEmailAndPassword(auth, email, email);
+  // 2. Sign in — password defaults to email (legacy), can be overridden.
+  const password = passwordOverride ?? email;
+  await signInWithEmailAndPassword(auth, email, password);
 
   // 3. Log successful attempt
   await set(ref(db, `${DB_ROOT}/loginLog/${userId}/${Date.now()}`), {

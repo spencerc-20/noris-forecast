@@ -16,7 +16,9 @@ interface NotesCellProps {
   onChange: (next: string) => void;
 }
 
-const PLACEHOLDER = "+ note for this doctor…";
+// Visible label / placeholder is "Strategy for this doctor". The underlying
+// field is still stored as `customer.notes` — only the surface copy changed.
+const PLACEHOLDER = "+ strategy for this doctor…";
 const MAX_ROWS    = 4;
 const MIN_ROWS    = 1;
 

@@ -1,18 +1,20 @@
-// app/(app)/team/page.tsx — Manager view: rep rollup for the manager's region.
+// app/(app)/team/page.tsx — Region rollup view.
 //
-// REVAMP v2.0: rolled-up metric cards across all reps in the region, plus the
-// expandable rep table. Read-only — managers click a rep row to see that rep's
+// REVAMP v2.0: rolled-up metric cards across all reps in a region, plus the
+// expandable rep table. Read-only — viewer clicks a rep row to see that rep's
 // customers inline.
 //
-// Manager scope is determined by:
-//   - manager  → their own region
-//   - VP/admin → also lands here, but sees their default region (region from appUser)
-//                — for the full multi-region view use /region instead.
+// Region scope:
+//   - manager → their own appUser.region (URL ?region= ignored for safety)
+//   - VP / admin → the URL `?region=Name` if provided, else their default region
+// This is how an admin drills into a specific region from /region's picker.
 
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { ChevronLeft } from "lucide-react";
 import { useAuth } from "@/lib/firebase/auth";
 import { getUsersForRegion } from "@/lib/firebase/users";
 import { subscribeToAllCustomers } from "@/lib/firebase/customers";
@@ -27,26 +29,33 @@ export default function TeamPage() {
   const { appUser } = useAuth();
   const searchParams = useSearchParams();
   const viewMonth = searchParams.get("month") || currentMonthKey();
+  // ?region= is honoured only for VP / admin. Managers always see their own
+  // region regardless of URL — this is a permission boundary, not just UI sugar.
+  const requestedRegion = searchParams.get("region");
+  const viewerCanPickRegion = !!appUser && (isVP(appUser) || isAdmin(appUser));
+  const activeRegion =
+    viewerCanPickRegion && requestedRegion
+      ? requestedRegion
+      : appUser?.region ?? "";
 
   const [reps, setReps] = useState<AppUser[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Permission gate — block plain reps (and unauthenticated). Layout already
-  // redirects unauthenticated, but a rep nav-typing to /team should be sent home.
+  // Permission note — the layout hides /team from plain reps, so URL-typing
+  // is the only way for a rep to land here. We leave the page renderable
+  // but the rep won't be able to read other reps' data via Firebase rules
+  // (rules enforce the real boundary).
   useEffect(() => {
     if (!appUser) return;
-    if (!isManager(appUser) && !isVP(appUser) && !isAdmin(appUser)) {
-      // We don't router.replace here — keep the page accessible at the URL but show empty;
-      // the layout will hide the nav link for reps so they shouldn't land here anyway.
-    }
+    if (!isManager(appUser) && !isVP(appUser) && !isAdmin(appUser)) return;
   }, [appUser]);
 
-  // Load reps for the manager's region (one-shot).
+  // Reload reps when activeRegion changes (admin nav between regions).
   useEffect(() => {
-    if (!appUser) return;
-    getUsersForRegion(appUser.region).then(setReps);
-  }, [appUser]);
+    if (!activeRegion) return;
+    getUsersForRegion(activeRegion).then(setReps);
+  }, [activeRegion]);
 
   // Live subscription to all customers — we slice client-side to just the
   // ones owned by reps in this region.
@@ -90,12 +99,24 @@ export default function TeamPage() {
 
   const monthDisplay = monthLabel(viewMonth);
 
+  // Admin/VP drilled in from /region get a back link so they can hop between regions.
+  const showBackToRegions = viewerCanPickRegion && !!requestedRegion;
+
   return (
     <div className="mx-auto max-w-[1300px] px-[22px] py-7 space-y-5">
       <div className="flex items-end justify-between">
         <div>
+          {showBackToRegions && (
+            <Link
+              href="/region"
+              className="inline-flex items-center gap-1 text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)] hover:text-[color:var(--text-spec)] mb-1.5"
+            >
+              <ChevronLeft size={11} />
+              All regions
+            </Link>
+          )}
           <h1 className="text-[18px] font-semibold text-[color:var(--text-spec)] leading-tight">
-            Team — {appUser.region}
+            Team — {activeRegion || "—"}
           </h1>
           <p className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)] mt-1">
             {monthDisplay} · {reps.length} rep{reps.length === 1 ? "" : "s"}

@@ -24,7 +24,9 @@ export function canViewRegion(viewer: AppUser, region: string): boolean {
 
 /** Default landing route based on role. */
 export function defaultRoute(user: AppUser): string {
-  if (isAdmin(user)) return "/admin";
+  // Admins land on the region picker so they can drill into any region; the
+  // /admin tab is still one click away in the topbar.
+  if (isAdmin(user)) return "/region";
   if (isVP(user)) return "/region";
   if (isManager(user)) return "/team";
   return "/dashboard";

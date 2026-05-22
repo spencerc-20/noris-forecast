@@ -28,6 +28,7 @@ import { RepList } from "@/components/rep/RepList";
 import { SaveStatusBadge } from "@/components/rep/SaveStatusBadge";
 import { AddToPipelineModal } from "@/components/rep/AddToPipelineModal";
 import { ConfirmDialog } from "@/components/rep/ConfirmDialog";
+import { RepForecastBox } from "@/components/rep/RepForecastBox";
 import type { Customer, DocType, MonthData, PipelineType } from "@/types";
 import type { EditableField, FieldValue } from "@/components/rep/RepListRow";
 
@@ -283,6 +284,9 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {/* Rep's gut-call forecast box — independent of the math below. */}
+      <RepForecastBox repId={appUser.id} monthKey={viewMonth} />
 
       <MetricCards metrics={metrics} />
 
