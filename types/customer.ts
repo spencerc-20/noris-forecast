@@ -29,8 +29,16 @@ export interface MonthData {
   expectedMonthlyTotal?: number;
   /** NEW accounts: % likelihood of closing (0–100). */
   closeProbability?: number;
-  /** NEW accounts: workflow status — "prospecting" by default, "closed" promotes to EXISTING. */
-  newStatus?: "prospecting" | "closed";
+  /**
+   * NEW accounts: 3-stage workflow status (REVAMP v2.0 + lifecycle-notes update).
+   *   new_potential    — default; rep has just added them, no real engagement yet.
+   *   actively_working — rep is actively in conversation / quoting / etc.
+   *   closed           — deal closed in this month. Counts toward the month's
+   *                      new-business total at 100% probability. Does NOT flip
+   *                      pipelineType — that only happens on month rollover.
+   * Legacy "prospecting" is treated as "new_potential" everywhere it surfaces.
+   */
+  newStatus?: "new_potential" | "actively_working" | "closed" | "prospecting";
 }
 
 export interface Customer {
@@ -77,11 +85,12 @@ export interface Customer {
   /** % likelihood the new-pipeline deal actually closes this month (0–100). */
   closeProbability?: number;
   /**
-   * NEW-row workflow status. "prospecting" is the default. Moving to "closed"
-   * converts the row into an EXISTING recurring account — see Step 4 logic in
-   * the dashboard `handleStatusChange`.
+   * @deprecated Per-month newStatus now lives in `months[YYYY-MM].newStatus`.
+   * Kept on the customer-level for back-compat with pre-Step-5 records.
+   * 3-stage values: new_potential / actively_working / closed (legacy "prospecting"
+   * maps to "new_potential").
    */
-  newStatus?: "prospecting" | "closed";
+  newStatus?: "new_potential" | "actively_working" | "closed" | "prospecting";
 
   // EXISTING-recurring fields (used when pipelineType === "existing")
   /** Customer's normal monthly run-rate. Rep-entered baseline. */

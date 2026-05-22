@@ -20,6 +20,7 @@ import {
   fieldPathFor,
   isMonthlyField,
   monthLabel,
+  mostRecentClosedMonth,
 } from "@/lib/forecast/monthData";
 import { MetricCards } from "@/components/rep/MetricCards";
 import { RepListFilters } from "@/components/rep/RepListFilters";
@@ -114,48 +115,81 @@ export default function DashboardPage() {
   };
 
   /**
-   * Step 4 — NEW row closes → convert to EXISTING recurring account.
+   * Month-rollover converter (REVAMP v2.0 + lifecycle-notes update).
    *
-   * The closed-deal dollar amount seeds expectedMonthly for the current view
-   * month and lands in actualThisMonth (so the on-track gauge reads 100%
-   * immediately). The customer-level pipelineType flips so the row re-renders
-   * with the EXISTING column layout from the next paint onward.
+   * Closing a NEW row mid-month does NOT flip pipelineType — those dollars stay
+   * in the month's new-business total. The flip happens on the FIRST LOAD of a
+   * LATER month: if a customer is still pipelineType="new" but had newStatus
+   * "closed" in any prior month, convert them to EXISTING here and seed
+   * `months[viewMonth].expectedMonthly` with the closed-deal dollar amount
+   * from that prior month (so their first month as an existing account
+   * already has the right baseline).
+   *
+   * The historical prior month is left untouched — it stays as a pipelineType
+   * "new" + newStatus "closed" record so when the rep scrolls back they see
+   * the row exactly as it was at the time of close.
+   *
+   * Idempotent: once pipelineType flips, the check finds "existing" and skips.
+   * Guarded by `rolloverProcessedRef` so it can't loop on the same load.
    */
-  const handleCloseConversion = (customer: Customer) => {
-    const closedAmount = customer.expectedMonthlyTotal ?? 0;
+  const rolloverProcessedRef = useRef<{ month: string; ids: Set<string> }>({
+    month: "",
+    ids: new Set(),
+  });
 
-    // Per-month patches (slash-keyed for RTDB multi-path update).
-    const monthlyPatch: Record<string, unknown> = {
-      [`months/${viewMonth}/newStatus`]:            "closed",
-      [`months/${viewMonth}/expectedMonthly`]:      closedAmount,
-      [`months/${viewMonth}/actualThisMonth`]:      closedAmount,
-      [`months/${viewMonth}/expectedMonthlyTotal`]: 0,
-      [`months/${viewMonth}/closeProbability`]:     0,
-    };
-    // Customer-level — the pipeline type itself flips permanently.
-    const customerPatch: Record<string, unknown> = { pipelineType: "existing" };
+  useEffect(() => {
+    if (loading || customers.length === 0) return;
 
-    const existing = pendingRef.current.get(customer.id) ?? {};
-    pendingRef.current.set(customer.id, { ...existing, ...monthlyPatch, ...customerPatch });
-    requestSave(pendingRef.current);
+    // Reset the per-load guard whenever the viewed month changes.
+    if (rolloverProcessedRef.current.month !== viewMonth) {
+      rolloverProcessedRef.current = { month: viewMonth, ids: new Set() };
+    }
 
-    // Optimistic update — mirror BOTH paths in local state.
+    const candidates = customers.filter((c) => {
+      if (c.inPipeline !== true)        return false;
+      if (c.pipelineType !== "new")     return false;
+      if (rolloverProcessedRef.current.ids.has(c.id)) return false;
+      const closedMonth = mostRecentClosedMonth(c);
+      // Must have a prior close (strictly before the month we're viewing).
+      return !!closedMonth && closedMonth < viewMonth;
+    });
+
+    if (candidates.length === 0) return;
+
+    // Single-shot writes outside the autosave queue — these are system
+    // conversions, not rep edits, and we want them to land immediately.
+    candidates.forEach((c) => {
+      const closedMonth = mostRecentClosedMonth(c)!;
+      const closedAmount = c.months?.[closedMonth]?.expectedMonthlyTotal ?? 0;
+
+      // Don't overwrite an expectedMonthly the rep has already set for viewMonth.
+      const existingExpected = c.months?.[viewMonth]?.expectedMonthly;
+      const patch: Record<string, unknown> = {
+        pipelineType: "existing",
+      };
+      if (existingExpected == null) {
+        patch[`months/${viewMonth}/expectedMonthly`] = closedAmount;
+      }
+
+      rolloverProcessedRef.current.ids.add(c.id);
+      void patchCustomer(c.id, patch as Partial<Customer>);
+    });
+
+    // Optimistic update so the UI reflects the conversion this render.
+    const ids = new Set(candidates.map((c) => c.id));
     setCustomers((prev) =>
       prev.map((c) => {
-        if (c.id !== customer.id) return c;
+        if (!ids.has(c.id)) return c;
+        const closedMonth = mostRecentClosedMonth(c)!;
+        const closedAmount = c.months?.[closedMonth]?.expectedMonthlyTotal ?? 0;
         const months = { ...(c.months ?? {}) };
-        months[viewMonth] = {
-          ...(months[viewMonth] ?? {}),
-          newStatus: "closed",
-          expectedMonthly: closedAmount,
-          actualThisMonth: closedAmount,
-          expectedMonthlyTotal: 0,
-          closeProbability: 0,
-        };
+        const bucket = { ...(months[viewMonth] ?? {}) };
+        if (bucket.expectedMonthly == null) bucket.expectedMonthly = closedAmount;
+        months[viewMonth] = bucket;
         return { ...c, pipelineType: "existing", months };
       })
     );
-  };
+  }, [customers, viewMonth, loading]);
 
   // ── Pipeline membership gate ───────────────────────────────────────────────
   const inPipelineCustomers = useMemo(
@@ -241,7 +275,6 @@ export default function DashboardPage() {
           customers={filtered}
           onFieldChange={handleFieldChange}
           totalCount={inPipelineCustomers.length}
-          onCloseConversion={handleCloseConversion}
         />
       )}
 

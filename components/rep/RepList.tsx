@@ -17,14 +17,12 @@ interface RepListProps {
   onFieldChange: (customerId: string, field: EditableField, value: FieldValue) => void;
   /** Total customers in the pipeline (pre-filter) — drives the footer count. */
   totalCount: number;
-  /** Called when a NEW row's status moves to "Closed" — page handles the conversion. */
-  onCloseConversion?: (customer: Customer) => void;
 }
 
 // Matches the 7-col grid in RepListRow exactly.
 const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px] gap-3";
 
-export function RepList({ customers, onFieldChange, totalCount, onCloseConversion }: RepListProps) {
+export function RepList({ customers, onFieldChange, totalCount }: RepListProps) {
   return (
     <div className="rounded-xl border border-[color:var(--border-spec)] bg-[color:var(--surface)] overflow-hidden">
       {/* Header row — darker bg, uppercase 10px labels. Column 5/6 labels read
@@ -54,7 +52,6 @@ export function RepList({ customers, onFieldChange, totalCount, onCloseConversio
             key={c.id}
             customer={c}
             onFieldChange={onFieldChange}
-            onCloseConversion={onCloseConversion}
           />
         ))
       )}

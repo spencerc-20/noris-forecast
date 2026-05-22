@@ -24,6 +24,7 @@ import {
   onTrackStatusFor,
   weightedTotalFor,
 } from "@/lib/forecast/repMetrics";
+import { NotesCell } from "./NotesCell";
 
 export type EditableField =
   | "pipelineType"
@@ -34,15 +35,16 @@ export type EditableField =
   | "expectedMonthly"
   | "actualThisMonth"
   | "newStatus"
-  | "inPipeline";
+  | "inPipeline"
+  | "notes";
+
+export type NewStatus = "new_potential" | "actively_working" | "closed";
 
 export type FieldValue = string | number | boolean | null;
 
 interface RepListRowProps {
   customer: Customer;
   onFieldChange: (customerId: string, field: EditableField, value: FieldValue) => void;
-  /** Called when the rep moves a NEW row to "Closed" — converts to EXISTING. */
-  onCloseConversion?: (customer: Customer) => void;
 }
 
 // ── Colour map ──────────────────────────────────────────────────────────────
@@ -194,40 +196,61 @@ function PipelineCell({
   );
 }
 
-/** "Prospecting" / "Closed" status dropdown on NEW rows. */
+/**
+ * 3-stage new-business status dropdown.
+ *   new_potential    — default; recently added, no real engagement
+ *   actively_working — in conversation / quoting
+ *   closed           — deal closed THIS month; stays pipelineType="new" until
+ *                      month rollover promotes it to EXISTING in the next month.
+ *
+ * Legacy "prospecting" maps to "new_potential" when read back.
+ */
 function NewStatusCell({
   customer,
   onChange,
 }: {
   customer: Customer;
-  onChange: (next: "prospecting" | "closed") => void;
+  onChange: (next: NewStatus) => void;
 }) {
-  const status = customer.newStatus ?? "prospecting";
+  // Coerce legacy "prospecting" into "new_potential" for the dropdown.
+  const raw = customer.newStatus ?? "new_potential";
+  const status: NewStatus = raw === "prospecting" ? "new_potential" : (raw as NewStatus);
+
   return (
     <select
       value={status}
-      onChange={(e) => onChange(e.target.value as "prospecting" | "closed")}
-      className="
-        w-full text-[12px] bg-transparent border border-transparent rounded-md
+      onChange={(e) => onChange(e.target.value as NewStatus)}
+      className={`
+        w-full text-[12px] border rounded-md
         px-1.5 py-0.5 cursor-pointer
-        text-[color:var(--text-spec)]
         transition-colors
-        hover:border-[color:var(--border-spec)]
+        focus:outline-none
         focus:border-[color:var(--noris)]
         focus:bg-[color:var(--surface-2)]
-        focus:outline-none
-      "
+        ${
+          status === "closed"
+            ? "bg-[color:var(--good)]/15 border-[color:var(--good)]/40 text-[color:var(--good)]"
+            : status === "actively_working"
+            ? "bg-[color:var(--warn)]/15 border-[color:var(--warn)]/40 text-[color:var(--warn)]"
+            : "bg-transparent border-transparent text-[color:var(--text-spec)] hover:border-[color:var(--border-spec)]"
+        }
+      `}
       title={
         status === "closed"
-          ? "Closed — picking this will convert the row to an EXISTING recurring account"
-          : "In active prospecting"
+          ? "Closed this month — counts in the month's new-business total at 100%. Converts to EXISTING on next month's rollover."
+          : status === "actively_working"
+          ? "Actively working — in conversation / quoting"
+          : "New potential — recently added"
       }
     >
-      <option value="prospecting" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
-        Prospecting
+      <option value="new_potential" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        New Potential
+      </option>
+      <option value="actively_working" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        Actively Working
       </option>
       <option value="closed" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
-        Close → Existing
+        Closed
       </option>
     </select>
   );
@@ -238,15 +261,19 @@ function NewStatusCell({
 // Shared 7-col grid: customer · type · doc-type · expected · prob/actual · status · projected
 const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px] gap-3";
 
-export function RepListRow({ customer, onFieldChange, onCloseConversion }: RepListRowProps) {
+export function RepListRow({ customer, onFieldChange }: RepListRowProps) {
   const isNew = customer.pipelineType === "new";
   const weighted = weightedTotalFor(customer);
   const trackPct = onTrackPctFor(customer);
   const trackStatus = onTrackStatusFor(trackPct);
 
+  // A row is two stacked elements: the 7-col data grid above, then the notes
+  // sub-row below. Both share the hover background so the row reads as one
+  // unit visually.
   return (
+    <div className="border-b border-[color:var(--border-spec)]/60 last:border-b-0 hover:bg-[color:var(--surface-2)]/40 transition-colors group/row">
     <div
-      className={`${GRID} items-center px-4 py-2 border-b border-[color:var(--border-spec)]/60 last:border-b-0 text-[13px] hover:bg-[color:var(--surface-2)]/40 transition-colors`}
+      className={`${GRID} items-center px-4 pt-2 pb-1 text-[13px]`}
     >
       {/* Customer / Practice */}
       <div className="min-w-0">
@@ -316,16 +343,18 @@ export function RepListRow({ customer, onFieldChange, onCloseConversion }: RepLi
         )}
       </div>
 
-      {/* Status — only NEW rows show the Prospecting / Closed dropdown */}
+      {/* Status — only NEW rows show the 3-stage dropdown */}
       <div>
         {isNew ? (
           <NewStatusCell
             customer={customer}
             onChange={(next) => {
-              if (next === "closed" && onCloseConversion) {
-                onCloseConversion(customer);
-              } else {
-                onFieldChange(customer.id, "newStatus", next);
+              onFieldChange(customer.id, "newStatus", next);
+              // Closing snaps the close% to 100 so the weighted line equals
+              // the dollar amount this month. (Backing out of Closed leaves
+              // the prior close% in place — the rep can re-tune manually.)
+              if (next === "closed") {
+                onFieldChange(customer.id, "closeProbability", 100);
               }
             }}
           />
@@ -349,6 +378,13 @@ export function RepListRow({ customer, onFieldChange, onCloseConversion }: RepLi
           </span>
         )}
       </div>
+    </div>
+
+    {/* Notes sub-row — customer-level, persists across months. */}
+    <NotesCell
+      value={customer.notes ?? ""}
+      onChange={(next) => onFieldChange(customer.id, "notes", next)}
+    />
     </div>
   );
 }

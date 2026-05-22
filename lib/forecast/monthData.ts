@@ -127,3 +127,18 @@ export function customerViewedAt(c: Customer, monthKey: string): Customer {
 export function fieldPathFor(field: string, monthKey: string): string {
   return isMonthlyField(field) ? `months/${monthKey}/${field}` : field;
 }
+
+/**
+ * Find the most recent month in which this customer's `newStatus` was "closed".
+ * Returns null if none exists. Used by the month-rollover converter.
+ */
+export function mostRecentClosedMonth(c: Customer): string | null {
+  if (!c.months) return null;
+  let latest: string | null = null;
+  for (const [key, bucket] of Object.entries(c.months)) {
+    if (bucket?.newStatus === "closed") {
+      if (!latest || key > latest) latest = key;
+    }
+  }
+  return latest;
+}
