@@ -5,12 +5,12 @@
 
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { format } from "date-fns";
 import { useAuth, signOut } from "@/lib/firebase/auth";
 import { isAdmin, isManager, isVP } from "@/lib/permissions/roles";
+import { MonthStepper } from "@/components/rep/MonthStepper";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -44,8 +44,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     await signOut();
     router.replace("/login");
   }
-
-  const monthLabel = format(new Date(), "MMMM yyyy");
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -84,9 +82,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </nav>
           </div>
 
-          {/* Month label center */}
-          <div className="text-center text-[12px] uppercase tracking-[0.08em] text-[color:var(--muted-spec)] tabular-nums">
-            {monthLabel}
+          {/* Month stepper center — drives the ?month=YYYY-MM URL param */}
+          <div className="flex justify-center">
+            <Suspense fallback={<span className="text-[12px] text-[color:var(--muted-spec)]">—</span>}>
+              <MonthStepper />
+            </Suspense>
           </div>
 
           {/* User + sign-out */}

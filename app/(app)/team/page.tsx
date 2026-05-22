@@ -12,18 +12,21 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/firebase/auth";
 import { getUsersForRegion } from "@/lib/firebase/users";
 import { subscribeToAllCustomers } from "@/lib/firebase/customers";
 import { isManager, isVP, isAdmin } from "@/lib/permissions/roles";
 import { calcRepMetrics } from "@/lib/forecast/repMetrics";
+import { currentMonthKey, customerViewedAt, monthLabel } from "@/lib/forecast/monthData";
 import { MetricCards } from "@/components/rep/MetricCards";
 import { RepRollupTable, type RepRollupEntry } from "@/components/rollup/RepRollupTable";
 import type { AppUser, Customer } from "@/types";
 
 export default function TeamPage() {
   const { appUser } = useAuth();
+  const searchParams = useSearchParams();
+  const viewMonth = searchParams.get("month") || currentMonthKey();
 
   const [reps, setReps] = useState<AppUser[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -57,12 +60,13 @@ export default function TeamPage() {
 
   // ── Roll up rep entries ─────────────────────────────────────────────────────
   // Only `inPipeline === true` customers count — background CSV records would
-  // otherwise inflate the totals with phantom pipeline.
+  // otherwise inflate the totals with phantom pipeline. Customers are
+  // viewed-at-month so the rollup respects the topbar stepper.
   const { entries, regionCustomers } = useMemo(() => {
     const repIds = new Set(reps.map((r) => r.id));
-    const regionCustomers = customers.filter(
-      (c) => repIds.has(c.ownerId) && c.inPipeline === true
-    );
+    const regionCustomers = customers
+      .filter((c) => repIds.has(c.ownerId) && c.inPipeline === true)
+      .map((c) => customerViewedAt(c, viewMonth));
     const byRep = new Map<string, Customer[]>();
     for (const c of regionCustomers) {
       const arr = byRep.get(c.ownerId) ?? [];
@@ -77,14 +81,14 @@ export default function TeamPage() {
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
     return { entries, regionCustomers };
-  }, [reps, customers]);
+  }, [reps, customers, viewMonth]);
 
   // Region-wide metrics roll up across every customer owned by any rep in the region.
   const totals = useMemo(() => calcRepMetrics(regionCustomers), [regionCustomers]);
 
   if (!appUser) return null;
 
-  const monthLabel = format(new Date(), "MMMM yyyy");
+  const monthDisplay = monthLabel(viewMonth);
 
   return (
     <div className="mx-auto max-w-[1300px] px-[22px] py-7 space-y-5">
@@ -94,7 +98,7 @@ export default function TeamPage() {
             Team — {appUser.region}
           </h1>
           <p className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)] mt-1">
-            {monthLabel} · {reps.length} rep{reps.length === 1 ? "" : "s"}
+            {monthDisplay} · {reps.length} rep{reps.length === 1 ? "" : "s"}
           </p>
         </div>
         <span className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)]">

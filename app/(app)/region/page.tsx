@@ -6,17 +6,20 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/firebase/auth";
 import { getUsersByRegion } from "@/lib/firebase/users";
 import { subscribeToAllCustomers } from "@/lib/firebase/customers";
 import { calcRepMetrics, formatDollars } from "@/lib/forecast/repMetrics";
+import { currentMonthKey, customerViewedAt, monthLabel } from "@/lib/forecast/monthData";
 import { MetricCards } from "@/components/rep/MetricCards";
 import { RepRollupTable, type RepRollupEntry } from "@/components/rollup/RepRollupTable";
 import type { AppUser, Customer } from "@/types";
 
 export default function RegionPage() {
   const { appUser } = useAuth();
+  const searchParams = useSearchParams();
+  const viewMonth = searchParams.get("month") || currentMonthKey();
 
   const [byRegion, setByRegion] = useState<Record<string, AppUser[]>>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -37,10 +40,13 @@ export default function RegionPage() {
 
   // Build per-region entry lists; also keep an "all customers" totals view.
   // Only count `inPipeline === true` customers — background records are silent.
+  // Each customer is viewed-at-month before being bucketed by owner so the
+  // computed metrics use the right month's expectedMonthly / actualThisMonth.
   const { regionBlocks, allCustomers } = useMemo(() => {
     const customersByOwner = new Map<string, Customer[]>();
-    for (const c of customers) {
-      if (c.inPipeline !== true) continue;
+    for (const raw of customers) {
+      if (raw.inPipeline !== true) continue;
+      const c = customerViewedAt(raw, viewMonth);
       const arr = customersByOwner.get(c.ownerId) ?? [];
       arr.push(c);
       customersByOwner.set(c.ownerId, arr);
@@ -68,18 +74,18 @@ export default function RegionPage() {
     const allOwnerIds = new Set(
       Object.values(byRegion).flat().map((u) => u.id)
     );
-    const allCustomers = customers.filter(
-      (c) => allOwnerIds.has(c.ownerId) && c.inPipeline === true
-    );
+    const allCustomers = customers
+      .filter((c) => allOwnerIds.has(c.ownerId) && c.inPipeline === true)
+      .map((c) => customerViewedAt(c, viewMonth));
 
     return { regionBlocks, allCustomers };
-  }, [byRegion, customers]);
+  }, [byRegion, customers, viewMonth]);
 
   const grandTotals = useMemo(() => calcRepMetrics(allCustomers), [allCustomers]);
 
   if (!appUser) return null;
 
-  const monthLabel = format(new Date(), "MMMM yyyy");
+  const monthDisplay = monthLabel(viewMonth);
   const totalReps = Object.values(byRegion).reduce((sum, list) => sum + list.length, 0);
 
   return (
@@ -90,7 +96,7 @@ export default function RegionPage() {
             All Regions
           </h1>
           <p className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)] mt-1">
-            {monthLabel} · {regionBlocks.length} region{regionBlocks.length === 1 ? "" : "s"} · {totalReps} rep{totalReps === 1 ? "" : "s"}
+            {monthDisplay} · {regionBlocks.length} region{regionBlocks.length === 1 ? "" : "s"} · {totalReps} rep{totalReps === 1 ? "" : "s"}
           </p>
         </div>
         <span className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)]">

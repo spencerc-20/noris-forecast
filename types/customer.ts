@@ -15,6 +15,24 @@ import type {
   RevenueDataSource,
 } from "./taxonomy";
 
+/**
+ * Per-month forecast data for a single customer. Stored under
+ * `customers/{id}/months/{YYYY-MM}/` so a rep can scroll through prior months
+ * and see how each one tracked.
+ */
+export interface MonthData {
+  /** EXISTING accounts: the rep's monthly run-rate expectation. */
+  expectedMonthly?: number;
+  /** EXISTING accounts: dollars actually purchased this month. */
+  actualThisMonth?: number;
+  /** NEW accounts: dollars the rep expects to close THIS month. */
+  expectedMonthlyTotal?: number;
+  /** NEW accounts: % likelihood of closing (0–100). */
+  closeProbability?: number;
+  /** NEW accounts: workflow status — "prospecting" by default, "closed" promotes to EXISTING. */
+  newStatus?: "prospecting" | "closed";
+}
+
 export interface Customer {
   id: string; // Firebase key (set client-side after read)
 
@@ -37,6 +55,15 @@ export interface Customer {
 
   /** "new" = active prospect (rep is pitching), "existing" = recurring book account. */
   pipelineType: PipelineType;
+
+  /**
+   * Per-month forecast data, keyed by "YYYY-MM". Each bucket holds the dollar
+   * + percent + status fields that the rep edits monthly. The top-level
+   * expectedMonthly/actualThisMonth/expectedMonthlyTotal/closeProbability/
+   * newStatus fields are kept as @deprecated fallbacks for pre-month-schema
+   * records — read the per-month bucket first, fall back if absent.
+   */
+  months?: Record<string, MonthData>;
 
   /** Clinical doc-type — auto-derived from Sheet 2 unit mix, rep-overridable. */
   docType: DocType;

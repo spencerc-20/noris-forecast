@@ -1,39 +1,51 @@
-// app/(app)/dashboard/page.tsx — Rep's unified monthly pipeline view (REVAMP v2.0).
+// app/(app)/dashboard/page.tsx — Rep's unified monthly pipeline view (REVAMP v2.0 + Step 5).
 //
 // One screen. No sub-pages. All editing is inline → debounced autosave.
-// Replaces the old deal-centric dashboard entirely (deals UI is being removed in Step 4).
+// Step 5: the visible month comes from the `?month=YYYY-MM` URL param (set by
+// the topbar stepper); per-month forecast data lives under
+// `customers/{id}/months/{YYYY-MM}/` and is spread onto the row via
+// `customerViewedAt()` so the row component stays month-agnostic.
 
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { format } from "date-fns";
+import { useSearchParams } from "next/navigation";
 import { subscribeToUserCustomers, patchCustomer } from "@/lib/firebase/customers";
 import { useAuth } from "@/lib/firebase/auth";
 import { useAutosave } from "@/lib/hooks/useAutosave";
 import { calcRepMetrics } from "@/lib/forecast/repMetrics";
+import {
+  currentMonthKey,
+  customerViewedAt,
+  fieldPathFor,
+  isMonthlyField,
+  monthLabel,
+} from "@/lib/forecast/monthData";
 import { MetricCards } from "@/components/rep/MetricCards";
 import { RepListFilters } from "@/components/rep/RepListFilters";
 import { RepList } from "@/components/rep/RepList";
 import { SaveStatusBadge } from "@/components/rep/SaveStatusBadge";
 import { AddToPipelineModal } from "@/components/rep/AddToPipelineModal";
-import type { Customer, DocType, PipelineType } from "@/types";
+import type { Customer, DocType, MonthData, PipelineType } from "@/types";
 import type { EditableField, FieldValue } from "@/components/rep/RepListRow";
 
 /**
- * Coalesce field changes from every row into a single per-customer patch so we
- * batch multiple keystrokes on different fields into one Firebase write.
- *
- * Key insight: the inline cells fire `onFieldChange` on EVERY keystroke. We
- * accumulate into `pendingRef` and request() the autosave hook — the hook waits
- * 800ms, then flushes the accumulated patch.
+ * Pending writes are keyed by customer.id and value is a flat object of
+ * Firebase multi-path keys — e.g. { "months/2026-05/expectedMonthly": 1000 }
+ * for monthly fields, { "pipelineType": "existing" } for customer-level.
+ * RTDB `update()` honours slash-keys as nested paths.
  */
-type PendingPatches = Map<string, Partial<Customer>>;
+type PendingPatches = Map<string, Record<string, unknown>>;
 
 export default function DashboardPage() {
   const { appUser } = useAuth();
+  const searchParams = useSearchParams();
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Currently-viewed month — driven by ?month in the URL, defaults to "now".
+  const viewMonth = searchParams.get("month") || currentMonthKey();
 
   // Filter state — purely client-side
   const [search, setSearch] = useState("");
@@ -53,90 +65,113 @@ export default function DashboardPage() {
   }, [appUser]);
 
   // ── Autosave plumbing ──────────────────────────────────────────────────────
-  // Pending patches are accumulated outside React state so they don't trigger
-  // re-renders on every keystroke.
   const pendingRef = useRef<PendingPatches>(new Map());
 
   const { request: requestSave, flushNow, status, errorMessage } = useAutosave<PendingPatches>(
     async (patches) => {
-      // Flush every queued customer in parallel (one Firebase write per customer).
       const writes: Promise<void>[] = [];
       patches.forEach((fields, customerId) => {
-        writes.push(patchCustomer(customerId, fields));
+        writes.push(patchCustomer(customerId, fields as Partial<Customer>));
       });
-      pendingRef.current = new Map(); // clear after queuing the writes
+      pendingRef.current = new Map();
       await Promise.all(writes);
     },
     800
   );
 
-  // Flush any pending writes when the user navigates away.
+  // Flush any pending writes when the user navigates away (or changes month).
   useEffect(() => {
     const onBeforeUnload = () => flushNow();
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [flushNow]);
+  useEffect(() => { flushNow(); }, [viewMonth, flushNow]);
 
+  /**
+   * One field write from a row. Translates the field name into the right
+   * Firebase path (per-month or customer-level) and applies an optimistic
+   * local update that mirrors the storage shape.
+   */
   const handleFieldChange = (customerId: string, field: EditableField, value: FieldValue) => {
-    // Merge into the customer's pending patch. The autosave hook treats the
-    // ref's contents as a single "value" — we just hand it the live map.
+    const path = fieldPathFor(field, viewMonth);
     const existing = pendingRef.current.get(customerId) ?? {};
-    const next = { ...existing, [field]: value } as Partial<Customer>;
-    pendingRef.current.set(customerId, next);
+    pendingRef.current.set(customerId, { ...existing, [path]: value });
     requestSave(pendingRef.current);
 
-    // Optimistic local update so the UI reflects the change immediately.
     setCustomers((prev) =>
-      prev.map((c) => (c.id === customerId ? ({ ...c, [field]: value } as Customer) : c))
+      prev.map((c) => {
+        if (c.id !== customerId) return c;
+        if (isMonthlyField(field)) {
+          const months = { ...(c.months ?? {}) };
+          const bucket = { ...(months[viewMonth] ?? {}) } as MonthData;
+          (bucket as Record<string, unknown>)[field] = value;
+          months[viewMonth] = bucket;
+          return { ...c, months };
+        }
+        return { ...c, [field]: value } as Customer;
+      })
     );
   };
 
   /**
    * Step 4 — NEW row closes → convert to EXISTING recurring account.
    *
-   * The closed-deal dollar amount (whichever of expectedMonthlyTotal × close% we
-   * trust most — we use the rep's explicit expectedMonthlyTotal, since that's
-   * what "they expect to close this month") seeds the customer's expectedMonthly
-   * baseline. The same dollar amount also lands in actualThisMonth so the
-   * month's "existing actual" total reflects the close immediately.
-   *
-   * After the swap the row renders with the EXISTING column layout — on-track
-   * starts at 100% (actual === expected).
+   * The closed-deal dollar amount seeds expectedMonthly for the current view
+   * month and lands in actualThisMonth (so the on-track gauge reads 100%
+   * immediately). The customer-level pipelineType flips so the row re-renders
+   * with the EXISTING column layout from the next paint onward.
    */
   const handleCloseConversion = (customer: Customer) => {
     const closedAmount = customer.expectedMonthlyTotal ?? 0;
-    const patch: Partial<Customer> = {
-      pipelineType: "existing",
-      newStatus: "closed",
-      expectedMonthly: closedAmount,
-      actualThisMonth: closedAmount,
-      // Clear the now-meaningless new-pipeline fields.
-      expectedMonthlyTotal: 0,
-      closeProbability: 0,
-    };
 
-    // Queue the multi-field patch through the same autosave path so the badge fires.
+    // Per-month patches (slash-keyed for RTDB multi-path update).
+    const monthlyPatch: Record<string, unknown> = {
+      [`months/${viewMonth}/newStatus`]:            "closed",
+      [`months/${viewMonth}/expectedMonthly`]:      closedAmount,
+      [`months/${viewMonth}/actualThisMonth`]:      closedAmount,
+      [`months/${viewMonth}/expectedMonthlyTotal`]: 0,
+      [`months/${viewMonth}/closeProbability`]:     0,
+    };
+    // Customer-level — the pipeline type itself flips permanently.
+    const customerPatch: Record<string, unknown> = { pipelineType: "existing" };
+
     const existing = pendingRef.current.get(customer.id) ?? {};
-    pendingRef.current.set(customer.id, { ...existing, ...patch });
+    pendingRef.current.set(customer.id, { ...existing, ...monthlyPatch, ...customerPatch });
     requestSave(pendingRef.current);
 
+    // Optimistic update — mirror BOTH paths in local state.
     setCustomers((prev) =>
-      prev.map((c) => (c.id === customer.id ? ({ ...c, ...patch } as Customer) : c))
+      prev.map((c) => {
+        if (c.id !== customer.id) return c;
+        const months = { ...(c.months ?? {}) };
+        months[viewMonth] = {
+          ...(months[viewMonth] ?? {}),
+          newStatus: "closed",
+          expectedMonthly: closedAmount,
+          actualThisMonth: closedAmount,
+          expectedMonthlyTotal: 0,
+          closeProbability: 0,
+        };
+        return { ...c, pipelineType: "existing", months };
+      })
     );
   };
 
   // ── Pipeline membership gate ───────────────────────────────────────────────
-  // Only customers the rep has explicitly added to this month's pipeline show up.
-  // CSV-imported background customers stay invisible until the rep promotes them
-  // via the "+ Add to pipeline" flow.
   const inPipelineCustomers = useMemo(
     () => customers.filter((c) => c.inPipeline === true),
     [customers]
   );
 
+  // ── Spread the viewed-month's bucket onto each customer so rows stay agnostic
+  const viewedCustomers = useMemo(
+    () => inPipelineCustomers.map((c) => customerViewedAt(c, viewMonth)),
+    [inPipelineCustomers, viewMonth]
+  );
+
   // ── Filter + sort ──────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
-    let list = inPipelineCustomers;
+    let list = viewedCustomers;
     if (search) {
       const q = search.toLowerCase();
       list = list.filter(
@@ -148,14 +183,15 @@ export default function DashboardPage() {
     if (pipelineFilter) list = list.filter((c) => c.pipelineType === pipelineFilter);
     if (docTypeFilter)  list = list.filter((c) => c.docType === docTypeFilter);
     return list.slice().sort((a, b) => a.name.localeCompare(b.name));
-  }, [inPipelineCustomers, search, pipelineFilter, docTypeFilter]);
+  }, [viewedCustomers, search, pipelineFilter, docTypeFilter]);
 
-  // ── Metrics (computed over the FILTERED view so they react to the chips) ───
+  // Metrics over the filtered view — already month-resolved.
   const metrics = useMemo(() => calcRepMetrics(filtered), [filtered]);
 
   if (!appUser) return null;
 
-  const monthLabel = format(new Date(), "MMMM yyyy");
+  const monthDisplay = monthLabel(viewMonth);
+  const isCurrentMonth = viewMonth === currentMonthKey();
 
   return (
     <div className="mx-auto max-w-[1300px] px-[22px] py-7 space-y-5">
@@ -166,7 +202,12 @@ export default function DashboardPage() {
             My Pipeline
           </h1>
           <p className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)] mt-1">
-            {monthLabel}
+            {monthDisplay}
+            {!isCurrentMonth && (
+              <span className="ml-2 text-[color:var(--warn)] normal-case tracking-normal">
+                · viewing historical month
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-3">
