@@ -33,9 +33,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (!user || !appUser) return null;
 
+  // Admin doesn't get Dashboard or Team — they live above the per-rep view
+  // and only need the Region overview + the Admin panel.
   const navLinks = [
-    { href: "/dashboard", label: "Dashboard", show: true },
-    { href: "/team",      label: "Team",      show: isManager(appUser) || isVP(appUser) || isAdmin(appUser) },
+    { href: "/dashboard", label: "Dashboard", show: !isAdmin(appUser) },
+    { href: "/team",      label: "Team",      show: isManager(appUser) || isVP(appUser) },
     { href: "/region",    label: "Region",    show: isVP(appUser) || isAdmin(appUser) },
     { href: "/admin",     label: "Admin",     show: isAdmin(appUser) },
   ].filter((l) => l.show);
