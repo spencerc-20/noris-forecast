@@ -10,19 +10,22 @@
 
 import type { Customer } from "@/types";
 import type { EditableField, FieldValue } from "./RepListRow";
-import { RepListRow } from "./RepListRow";
+import { RepListRow, REP_LIST_GRID } from "./RepListRow";
 
 interface RepListProps {
   customers: Customer[];
   onFieldChange: (customerId: string, field: EditableField, value: FieldValue) => void;
   /** Total customers in the pipeline (pre-filter) — drives the footer count. */
   totalCount: number;
+  /** Open the remove-from-pipeline confirm for this customer. */
+  onRequestRemove?: (customer: Customer) => void;
 }
 
-// Matches the 7-col grid in RepListRow exactly.
-const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px] gap-3";
+// Header layout mirrors the row's 8-col grid exactly (last column is for the
+// hover-revealed trash action — header just renders an empty cell there).
+const GRID = REP_LIST_GRID;
 
-export function RepList({ customers, onFieldChange, totalCount }: RepListProps) {
+export function RepList({ customers, onFieldChange, totalCount, onRequestRemove }: RepListProps) {
   return (
     <div className="rounded-xl border border-[color:var(--border-spec)] bg-[color:var(--surface)] overflow-hidden">
       {/* Header row — darker bg, uppercase 10px labels. Column 5/6 labels read
@@ -38,6 +41,7 @@ export function RepList({ customers, onFieldChange, totalCount }: RepListProps) 
         <div className="text-right">Close % / Actual $</div>
         <div>Status</div>
         <div className="text-right">Weighted / On track</div>
+        <div />{/* row-actions column header is intentionally blank */}
       </div>
 
       {customers.length === 0 ? (
@@ -52,6 +56,7 @@ export function RepList({ customers, onFieldChange, totalCount }: RepListProps) 
             key={c.id}
             customer={c}
             onFieldChange={onFieldChange}
+            onRequestRemove={onRequestRemove}
           />
         ))
       )}

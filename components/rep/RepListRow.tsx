@@ -16,6 +16,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import type { Customer, DocType, PipelineType } from "@/types";
 import { DOC_TYPE_LABELS, DOC_TYPE_ORDER } from "@/types";
 import {
@@ -45,6 +46,12 @@ export type FieldValue = string | number | boolean | null;
 interface RepListRowProps {
   customer: Customer;
   onFieldChange: (customerId: string, field: EditableField, value: FieldValue) => void;
+  /**
+   * Row remove action — the page opens a confirm dialog, and on confirm
+   * patches `inPipeline=false`. We don't perform the soft-delete here so
+   * a single ConfirmDialog instance can be reused across all rows.
+   */
+  onRequestRemove?: (customer: Customer) => void;
 }
 
 // ── Colour map ──────────────────────────────────────────────────────────────
@@ -173,6 +180,16 @@ function DocTypeCell({
   );
 }
 
+/**
+ * Pipeline-type cell — an editable dropdown so reps can flip both ways
+ * (NEW ↔ EXISTING) directly. Manual flips are immediate — they don't go
+ * through the close→rollover path. Background colour cues stay consistent
+ * with the prior chip style so reps can scan a column quickly.
+ *
+ * Note: the underlying <select> control inherits its background from
+ * `bg`-class on the parent (set per state below). Native option dropdowns
+ * always render in the OS theme — we use surface-2 + text-spec to harmonise.
+ */
 function PipelineCell({
   customer,
   onChange,
@@ -182,17 +199,28 @@ function PipelineCell({
 }) {
   const isNew = customer.pipelineType === "new";
   return (
-    <button
-      onClick={() => onChange(isNew ? "existing" : "new")}
-      title="Click to toggle pipeline type"
-      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wide transition-colors ${
-        isNew
-          ? "border-[#3b6aff]/40 bg-[#3b6aff]/15 text-[#9ab3ff]"
-          : "border-[color:var(--good)]/40 bg-[color:var(--good)]/15 text-[color:var(--good)]"
-      }`}
+    <select
+      value={customer.pipelineType}
+      onChange={(e) => onChange(e.target.value as PipelineType)}
+      title="Flip pipeline type (new prospect ↔ existing recurring)"
+      className={`
+        rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wide
+        cursor-pointer transition-colors
+        focus:outline-none
+        ${
+          isNew
+            ? "border-[#3b6aff]/40 bg-[#3b6aff]/15 text-[#9ab3ff] hover:border-[#3b6aff]/70 focus:border-[#3b6aff]"
+            : "border-[color:var(--good)]/40 bg-[color:var(--good)]/15 text-[color:var(--good)] hover:border-[color:var(--good)] focus:border-[color:var(--good)]"
+        }
+      `}
     >
-      {isNew ? "NEW" : "EXISTING"}
-    </button>
+      <option value="new" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        NEW
+      </option>
+      <option value="existing" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        EXISTING
+      </option>
+    </select>
   );
 }
 
@@ -258,10 +286,14 @@ function NewStatusCell({
 
 // ── Main row ─────────────────────────────────────────────────────────────────
 
-// Shared 7-col grid: customer · type · doc-type · expected · prob/actual · status · projected
-const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px] gap-3";
+// Shared 8-col grid: customer · type · doc-type · expected · prob/actual · status · projected · actions
+// The trailing actions column is intentionally narrow (28px) and its icon is
+// hover-revealed so the row stays visually quiet at rest.
+const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px_28px] gap-3";
+// Export the grid template so RepList's header row can match it exactly.
+export const REP_LIST_GRID = GRID;
 
-export function RepListRow({ customer, onFieldChange }: RepListRowProps) {
+export function RepListRow({ customer, onFieldChange, onRequestRemove }: RepListRowProps) {
   const isNew = customer.pipelineType === "new";
   const weighted = weightedTotalFor(customer);
   const trackPct = onTrackPctFor(customer);
@@ -376,6 +408,26 @@ export function RepListRow({ customer, onFieldChange }: RepListRowProps) {
           <span className={ON_TRACK_TEXT[trackStatus]}>
             {trackPct == null ? "—" : `${trackPct}% on track`}
           </span>
+        )}
+      </div>
+
+      {/* Row actions — hover-revealed trash icon. Soft delete only (inPipeline=false). */}
+      <div className="flex justify-end">
+        {onRequestRemove && (
+          <button
+            onClick={() => onRequestRemove(customer)}
+            title="Remove from pipeline (customer record is preserved in the background)"
+            aria-label={`Remove ${customer.name} from pipeline`}
+            className="
+              opacity-0 group-hover/row:opacity-100 focus:opacity-100
+              rounded p-1 text-[color:var(--muted-spec)]
+              hover:text-[color:var(--bad)] hover:bg-[color:var(--bad)]/10
+              transition-opacity transition-colors
+              focus:outline-none focus:ring-1 focus:ring-[color:var(--bad)]/40
+            "
+          >
+            <Trash2 size={13} />
+          </button>
         )}
       </div>
     </div>

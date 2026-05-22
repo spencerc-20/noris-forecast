@@ -27,6 +27,7 @@ import { RepListFilters } from "@/components/rep/RepListFilters";
 import { RepList } from "@/components/rep/RepList";
 import { SaveStatusBadge } from "@/components/rep/SaveStatusBadge";
 import { AddToPipelineModal } from "@/components/rep/AddToPipelineModal";
+import { ConfirmDialog } from "@/components/rep/ConfirmDialog";
 import type { Customer, DocType, MonthData, PipelineType } from "@/types";
 import type { EditableField, FieldValue } from "@/components/rep/RepListRow";
 
@@ -55,6 +56,9 @@ export default function DashboardPage() {
 
   // "+ Add to pipeline" modal
   const [addOpen, setAddOpen] = useState(false);
+
+  // Soft-delete confirm — null means dialog is closed.
+  const [removeCandidate, setRemoveCandidate] = useState<Customer | null>(null);
 
   // ── Live customer subscription ─────────────────────────────────────────────
   useEffect(() => {
@@ -191,6 +195,31 @@ export default function DashboardPage() {
     );
   }, [customers, viewMonth, loading]);
 
+  /**
+   * Soft-delete: take the customer out of this rep's working pipeline. The
+   * underlying customer record (docType, territory, revenue history, notes,
+   * months[]) is preserved — re-adding via the "+ Add to pipeline" search
+   * brings everything back. We bypass the autosave queue here so the row
+   * disappears immediately.
+   */
+  const handleRemoveConfirmed = async (customer: Customer) => {
+    setRemoveCandidate(null);
+    // Optimistic local update so the row vanishes before the network call.
+    setCustomers((prev) =>
+      prev.map((c) => (c.id === customer.id ? { ...c, inPipeline: false } : c))
+    );
+    try {
+      await patchCustomer(customer.id, { inPipeline: false });
+    } catch (err) {
+      // If the write fails, restore the row so the rep doesn't think it
+      // worked when it didn't.
+      setCustomers((prev) =>
+        prev.map((c) => (c.id === customer.id ? { ...c, inPipeline: true } : c))
+      );
+      console.error("Failed to remove customer from pipeline:", err);
+    }
+  };
+
   // ── Pipeline membership gate ───────────────────────────────────────────────
   const inPipelineCustomers = useMemo(
     () => customers.filter((c) => c.inPipeline === true),
@@ -275,6 +304,7 @@ export default function DashboardPage() {
           customers={filtered}
           onFieldChange={handleFieldChange}
           totalCount={inPipelineCustomers.length}
+          onRequestRemove={setRemoveCandidate}
         />
       )}
 
@@ -284,6 +314,17 @@ export default function DashboardPage() {
         ownerId={appUser.id}
         region={appUser.region}
         inPipelineIds={new Set(inPipelineCustomers.map((c) => c.id))}
+      />
+
+      <ConfirmDialog
+        open={removeCandidate != null}
+        title={`Remove ${removeCandidate?.name ?? ""} from your pipeline?`}
+        body="The customer record, doc-type, territory and history are preserved in the background — you can add them back any time via + Add to pipeline."
+        confirmLabel="Remove"
+        cancelLabel="Keep"
+        variant="danger"
+        onCancel={() => setRemoveCandidate(null)}
+        onConfirm={() => removeCandidate && handleRemoveConfirmed(removeCandidate)}
       />
     </div>
   );
