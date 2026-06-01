@@ -31,7 +31,9 @@ const ON_TRACK_TEXT: Record<ReturnType<typeof onTrackStatusFor>, string> = {
 };
 
 const TOP_GRID  = "grid grid-cols-[24px_2fr_1fr_1fr_1fr_1fr_140px] gap-3";
-const MINI_GRID = "grid grid-cols-[2fr_80px_120px_110px_110px_130px] gap-2";
+// Drilldown grid: customer · type · doc-type · expected · close%/actual · timeline · weighted/on-track
+// Timeline column added for parity with the rep dashboard (read-only here).
+const MINI_GRID = "grid grid-cols-[2fr_80px_120px_100px_100px_72px_130px] gap-2";
 
 export function RepRollupRow({ repName, region, customers }: RepRollupRowProps) {
   const [expanded, setExpanded] = useState(false);
@@ -92,6 +94,7 @@ export function RepRollupRow({ repName, region, customers }: RepRollupRowProps) 
                 <div>Doc-type</div>
                 <div className="text-right">Expected $</div>
                 <div className="text-right">Close % / Actual $</div>
+                <div>Timeline</div>
                 <div className="text-right">Weighted / On track</div>
               </div>
               {customers
@@ -102,56 +105,85 @@ export function RepRollupRow({ repName, region, customers }: RepRollupRowProps) 
                   const weighted = weightedTotalFor(c);
                   const pct = onTrackPctFor(c);
                   const st = onTrackStatusFor(pct);
+                  const notes = c.notes?.trim();
+                  // Rendering each customer as a small block: main data grid +
+                  // (optional) muted notes line below. The block carries the
+                  // bottom border so the strip beneath the notes still reads
+                  // as part of "this customer".
                   return (
                     <div
                       key={c.id}
-                      className={`${MINI_GRID} px-3 py-1.5 border-b border-[color:var(--border-spec)]/60 last:border-b-0 text-[12px] items-center`}
+                      className="border-b border-[color:var(--border-spec)]/60 last:border-b-0"
                     >
-                      <div className="min-w-0">
-                        <p className="font-medium truncate text-[color:var(--text-spec)]">
-                          {c.name}
-                        </p>
-                        {c.practiceName && (
-                          <p className="text-[10px] text-[color:var(--muted-spec)] truncate">
-                            {c.practiceName}
+                      <div
+                        className={`${MINI_GRID} px-3 pt-1.5 ${notes ? "pb-0.5" : "pb-1.5"} text-[12px] items-center`}
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium truncate text-[color:var(--text-spec)]">
+                            {c.name}
                           </p>
-                        )}
-                      </div>
-                      <div>
-                        <span
-                          className={`rounded-full border px-1.5 py-0.5 text-[9px] font-medium tracking-wide ${
-                            isNew
-                              ? "border-[#3b6aff]/40 bg-[#3b6aff]/15 text-[#9ab3ff]"
-                              : "border-[color:var(--good)]/40 bg-[color:var(--good)]/15 text-[color:var(--good)]"
+                          {c.practiceName && (
+                            <p className="text-[10px] text-[color:var(--muted-spec)] truncate">
+                              {c.practiceName}
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <span
+                            className={`rounded-full border px-1.5 py-0.5 text-[9px] font-medium tracking-wide ${
+                              isNew
+                                ? "border-[#3b6aff]/40 bg-[#3b6aff]/15 text-[#9ab3ff]"
+                                : "border-[color:var(--good)]/40 bg-[color:var(--good)]/15 text-[color:var(--good)]"
+                            }`}
+                          >
+                            {isNew ? "NEW" : "EXISTING"}
+                          </span>
+                        </div>
+                        <div className="truncate text-[color:var(--text-spec)]">
+                          {DOC_TYPE_LABELS[c.docType]}
+                        </div>
+                        <div className="text-right tabular-nums text-[color:var(--text-spec)]">
+                          {isNew
+                            ? formatDollars(c.expectedMonthlyTotal ?? 0)
+                            : formatDollars(c.expectedMonthly ?? 0)}
+                        </div>
+                        <div className="text-right tabular-nums text-[color:var(--text-spec)]">
+                          {isNew
+                            ? `${c.closeProbability ?? 0}%`
+                            : formatDollars(c.actualThisMonth ?? 0)}
+                        </div>
+                        <div className="text-[11px] text-[color:var(--text-spec)] tabular-nums">
+                          {isNew ? (c.closeWindow ? `${c.closeWindow} days` : "—") : "—"}
+                        </div>
+                        <div
+                          className={`text-right tabular-nums ${
+                            isNew ? "text-[color:var(--text-spec)]" : ON_TRACK_TEXT[st]
                           }`}
                         >
-                          {isNew ? "NEW" : "EXISTING"}
-                        </span>
+                          {isNew
+                            ? `${formatDollars(weighted)} weighted`
+                            : pct == null
+                            ? "—"
+                            : `${pct}% on track`}
+                        </div>
                       </div>
-                      <div className="truncate text-[color:var(--text-spec)]">
-                        {DOC_TYPE_LABELS[c.docType]}
-                      </div>
-                      <div className="text-right tabular-nums text-[color:var(--text-spec)]">
-                        {isNew
-                          ? formatDollars(c.expectedMonthlyTotal ?? 0)
-                          : formatDollars(c.expectedMonthly ?? 0)}
-                      </div>
-                      <div className="text-right tabular-nums text-[color:var(--text-spec)]">
-                        {isNew
-                          ? `${c.closeProbability ?? 0}%`
-                          : formatDollars(c.actualThisMonth ?? 0)}
-                      </div>
-                      <div
-                        className={`text-right tabular-nums ${
-                          isNew ? "text-[color:var(--text-spec)]" : ON_TRACK_TEXT[st]
-                        }`}
-                      >
-                        {isNew
-                          ? `${formatDollars(weighted)} weighted`
-                          : pct == null
-                          ? "—"
-                          : `${pct}% on track`}
-                      </div>
+                      {/* Strategy notes (read-only). Truncated single line;
+                          full text on hover via the title attribute. Only
+                          rendered when the rep has actually written something. */}
+                      {notes && (
+                        <div
+                          title={notes}
+                          className="
+                            px-3 pb-1.5 -mt-0.5
+                            text-[11px] leading-snug
+                            text-[color:var(--muted-spec)]
+                            whitespace-nowrap overflow-hidden text-ellipsis
+                          "
+                        >
+                          <span className="text-[color:var(--text-spec)]/40">Strategy: </span>
+                          {notes}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

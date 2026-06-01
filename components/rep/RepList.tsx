@@ -40,6 +40,7 @@ export function RepList({ customers, onFieldChange, totalCount, onRequestRemove 
         <div className="text-right">Expected $</div>
         <div className="text-right">Close % / Actual $</div>
         <div>Status</div>
+        <div>Timeline</div>
         <div className="text-right">Weighted / On track</div>
         <div />{/* row-actions column header is intentionally blank */}
       </div>

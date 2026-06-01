@@ -39,7 +39,17 @@ export interface MonthData {
    * Legacy "prospecting" is treated as "new_potential" everywhere it surfaces.
    */
   newStatus?: "new_potential" | "actively_working" | "closed" | "prospecting";
+  /**
+   * NEW accounts: rep's gut-call close window. 30 / 60 / 90 days.
+   * Undefined = rep hasn't classified the timeline yet. Per-month so the
+   * value can drift as the deal ages — looking back at last month shows the
+   * timeline the rep believed THEN, not the one they believe now.
+   */
+  closeWindow?: CloseWindow;
 }
+
+/** Close window bucket for NEW pipeline rows. */
+export type CloseWindow = "30" | "60" | "90";
 
 export interface Customer {
   id: string; // Firebase key (set client-side after read)
@@ -91,6 +101,13 @@ export interface Customer {
    * maps to "new_potential").
    */
   newStatus?: "new_potential" | "actively_working" | "closed" | "prospecting";
+  /**
+   * Mirror of MonthData.closeWindow on the top-level customer object. Never
+   * stored at the customer level — only populated by `customerViewedAt()` so
+   * row components can read it via the same flat shape as the other monthly
+   * fields. Always undefined when read directly from Firebase.
+   */
+  closeWindow?: CloseWindow;
 
   // EXISTING-recurring fields (used when pipelineType === "existing")
   /** Customer's normal monthly run-rate. Rep-entered baseline. */

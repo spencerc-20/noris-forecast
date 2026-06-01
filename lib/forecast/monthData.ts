@@ -39,6 +39,7 @@ export const MONTHLY_FIELDS: ReadonlyArray<keyof MonthData> = [
   "expectedMonthlyTotal",
   "closeProbability",
   "newStatus",
+  "closeWindow",
 ];
 
 const MONTHLY_FIELD_SET = new Set<string>(MONTHLY_FIELDS);
@@ -117,6 +118,7 @@ export function customerViewedAt(c: Customer, monthKey: string): Customer {
     expectedMonthlyTotal: m.expectedMonthlyTotal,
     closeProbability:     m.closeProbability,
     newStatus:            m.newStatus,
+    closeWindow:          m.closeWindow,
   };
 }
 

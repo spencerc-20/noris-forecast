@@ -36,6 +36,7 @@ export type EditableField =
   | "expectedMonthly"
   | "actualThisMonth"
   | "newStatus"
+  | "closeWindow"
   | "inPipeline"
   | "notes";
 
@@ -284,12 +285,57 @@ function NewStatusCell({
   );
 }
 
+/**
+ * Timeline (closeWindow) dropdown for NEW rows. 30 / 60 / 90 days.
+ * Empty option ("—") represents "not classified yet" — the rep's default state.
+ */
+function TimelineCell({
+  customer,
+  onChange,
+}: {
+  customer: Customer;
+  onChange: (next: "30" | "60" | "90" | "") => void;
+}) {
+  const value = customer.closeWindow ?? "";
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as "30" | "60" | "90" | "")}
+      title="How soon the rep thinks this deal can close"
+      className={`
+        w-full text-[12px] border rounded-md px-1.5 py-0.5
+        cursor-pointer transition-colors
+        focus:outline-none focus:border-[color:var(--noris)] focus:bg-[color:var(--surface-2)]
+        ${
+          value
+            ? "bg-[color:var(--surface-2)]/40 border-[color:var(--border-spec)] text-[color:var(--text-spec)]"
+            : "bg-transparent border-transparent text-[color:var(--muted-spec)] hover:border-[color:var(--border-spec)]"
+        }
+      `}
+    >
+      <option value="" className="bg-[color:var(--surface-2)] text-[color:var(--muted-spec)]">
+        — pick —
+      </option>
+      <option value="30" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        30 days
+      </option>
+      <option value="60" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        60 days
+      </option>
+      <option value="90" className="bg-[color:var(--surface-2)] text-[color:var(--text-spec)]">
+        90 days
+      </option>
+    </select>
+  );
+}
+
 // ── Main row ─────────────────────────────────────────────────────────────────
 
-// Shared 8-col grid: customer · type · doc-type · expected · prob/actual · status · projected · actions
-// The trailing actions column is intentionally narrow (28px) and its icon is
-// hover-revealed so the row stays visually quiet at rest.
-const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_140px_28px] gap-3";
+// Shared 9-col grid:
+//   customer · type · doc-type · expected · prob/actual · status · timeline · weighted · actions
+// Timeline is NEW-only (em-dash on EXISTING). Trailing actions column is 28px
+// for the hover-revealed trash icon.
+const GRID = "grid grid-cols-[2fr_90px_140px_110px_110px_120px_92px_140px_28px] gap-3";
 // Export the grid template so RepList's header row can match it exactly.
 export const REP_LIST_GRID = GRID;
 
@@ -393,6 +439,24 @@ export function RepListRow({ customer, onFieldChange, onRequestRemove }: RepList
         ) : (
           <span className="text-[11px] text-[color:var(--muted-spec)] tabular-nums pl-1.5">
             recurring
+          </span>
+        )}
+      </div>
+
+      {/* Timeline — only NEW rows. closeWindow stores "30" / "60" / "90"; an
+          empty string from the cell clears the field (we write null so the
+          per-month bucket doesn't carry a stale value forward). */}
+      <div>
+        {isNew ? (
+          <TimelineCell
+            customer={customer}
+            onChange={(next) =>
+              onFieldChange(customer.id, "closeWindow", next === "" ? null : next)
+            }
+          />
+        ) : (
+          <span className="text-[11px] text-[color:var(--muted-spec)] tabular-nums pl-1.5">
+            —
           </span>
         )}
       </div>
