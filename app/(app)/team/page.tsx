@@ -14,13 +14,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Download } from "lucide-react";
 import { useAuth } from "@/lib/firebase/auth";
 import { getUsersForRegion } from "@/lib/firebase/users";
 import { subscribeToAllCustomers } from "@/lib/firebase/customers";
 import { isManager, isVP, isAdmin } from "@/lib/permissions/roles";
 import { calcRepMetrics } from "@/lib/forecast/repMetrics";
 import { currentMonthKey, customerViewedAt, monthLabel } from "@/lib/forecast/monthData";
+import { exportRegionCsv } from "@/lib/forecast/exportTriggers";
 import { MetricCards } from "@/components/rep/MetricCards";
 import { RepRollupTable, type RepRollupEntry } from "@/components/rollup/RepRollupTable";
 import type { AppUser, Customer } from "@/types";
@@ -71,8 +72,14 @@ export default function TeamPage() {
   // Only `inPipeline === true` customers count — background CSV records would
   // otherwise inflate the totals with phantom pipeline. Customers are
   // viewed-at-month so the rollup respects the topbar stepper.
-  const { entries, regionCustomers } = useMemo(() => {
+  //
+  // NOTE: extended (not replaced) to also expose `usersById` for the export
+  // button. No new hook in this component — see /region for the same pattern
+  // and the history behind keeping this page hooks-stable.
+  const { entries, regionCustomers, usersById } = useMemo(() => {
     const repIds = new Set(reps.map((r) => r.id));
+    const usersById = new Map<string, AppUser>();
+    for (const r of reps) usersById.set(r.id, r);
     const regionCustomers = customers
       .filter((c) => repIds.has(c.ownerId) && c.inPipeline === true)
       .map((c) => customerViewedAt(c, viewMonth));
@@ -89,7 +96,7 @@ export default function TeamPage() {
         customers: byRep.get(r.id) ?? [],
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-    return { entries, regionCustomers };
+    return { entries, regionCustomers, usersById };
   }, [reps, customers, viewMonth]);
 
   // Region-wide metrics roll up across every customer owned by any rep in the region.
@@ -122,9 +129,37 @@ export default function TeamPage() {
             {monthDisplay} · {reps.length} rep{reps.length === 1 ? "" : "s"}
           </p>
         </div>
-        <span className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)]">
-          Read-only
-        </span>
+        <div className="flex flex-col items-end gap-1.5">
+          {/* No-hook export trigger — button state mutated by exportRegionCsv() directly. */}
+          <button
+            type="button"
+            disabled={!activeRegion}
+            onClick={(e) =>
+              exportRegionCsv({
+                btn: e.currentTarget,
+                monthKey: viewMonth,
+                customers: regionCustomers,
+                usersById,
+                regionLabel: activeRegion,
+              })
+            }
+            className="
+              inline-flex items-center gap-1.5 rounded-md
+              bg-[color:var(--noris)] text-white
+              px-3 py-1.5 text-[12px] font-medium
+              hover:bg-[color:var(--noris)]/90
+              disabled:opacity-50 disabled:cursor-not-allowed
+              transition-colors
+            "
+            title={`Download a CSV of the ${activeRegion || ""} region for ${monthDisplay}.`}
+          >
+            <Download size={13} />
+            Export CSV
+          </button>
+          <span className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)]">
+            Read-only
+          </span>
+        </div>
       </div>
 
       <MetricCards metrics={totals} />

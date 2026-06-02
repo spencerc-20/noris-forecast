@@ -13,12 +13,13 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Download } from "lucide-react";
 import { useAuth } from "@/lib/firebase/auth";
 import { getUsersByRegion } from "@/lib/firebase/users";
 import { subscribeToAllCustomers } from "@/lib/firebase/customers";
 import { calcRepMetrics, formatDollars, onTrackStatusFor } from "@/lib/forecast/repMetrics";
 import { currentMonthKey, customerViewedAt, monthLabel } from "@/lib/forecast/monthData";
+import { exportFullOrgXlsx } from "@/lib/forecast/exportTriggers";
 import { MetricCards } from "@/components/rep/MetricCards";
 import type { AppUser, Customer } from "@/types";
 
@@ -54,13 +55,23 @@ export default function RegionPage() {
   // Pre-compute per-region metrics + grand totals.
   // Only `inPipeline === true` customers are counted; each is viewed at the
   // selected month so the cards reflect what reps are pitching THIS month.
-  const { regionRows, grandTotals } = useMemo(() => {
+  // NOTE: This is the same useMemo as before — extended (NOT replaced) to
+  // also expose `allCustomers` + `usersById` for the export click handler.
+  // No new hooks are introduced in this component; the previous /region
+  // regressions (React error #310) were caused by adding a useState here.
+  const { regionRows, grandTotals, allCustomers, usersById } = useMemo(() => {
     const regions = Object.keys(byRegion).sort();
 
     // Map ownerId → region for fast lookup.
     const ownerRegion = new Map<string, string>();
+    // usersById is built in the same loop so the export handler doesn't
+    // have to rebuild it from byRegion at click time.
+    const usersById = new Map<string, AppUser>();
     for (const [region, users] of Object.entries(byRegion)) {
-      for (const u of users) ownerRegion.set(u.id, region);
+      for (const u of users) {
+        ownerRegion.set(u.id, region);
+        usersById.set(u.id, u);
+      }
     }
 
     // Filter once, then bucket by region.
@@ -80,7 +91,12 @@ export default function RegionPage() {
       totals: calcRepMetrics(buckets[region] ?? []),
     }));
 
-    return { regionRows, grandTotals: calcRepMetrics(liveCustomers) };
+    return {
+      regionRows,
+      grandTotals: calcRepMetrics(liveCustomers),
+      allCustomers: liveCustomers,
+      usersById,
+    };
   }, [byRegion, customers, viewMonth]);
 
   if (!appUser) return null;
@@ -99,9 +115,40 @@ export default function RegionPage() {
             {monthDisplay} · {regionRows.length} region{regionRows.length === 1 ? "" : "s"} · {totalReps} rep{totalReps === 1 ? "" : "s"}
           </p>
         </div>
-        <span className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)]">
-          Click a region to drill in
-        </span>
+        <div className="flex flex-col items-end gap-1.5">
+          {/*
+            Export trigger — NO React hooks. The button's "Exporting…" state
+            is managed by exportFullOrgXlsx() via direct DOM mutation on
+            event.currentTarget. This is deliberate: any new useState here
+            previously broke the page (React error #310).
+          */}
+          <button
+            type="button"
+            onClick={(e) =>
+              exportFullOrgXlsx({
+                btn: e.currentTarget,
+                monthKey: viewMonth,
+                customers: allCustomers,
+                usersById,
+              })
+            }
+            className="
+              inline-flex items-center gap-1.5 rounded-md
+              bg-[color:var(--noris)] text-white
+              px-3 py-1.5 text-[12px] font-medium
+              hover:bg-[color:var(--noris)]/90
+              disabled:opacity-50 disabled:cursor-not-allowed
+              transition-colors
+            "
+            title={`Download an Excel workbook for ${monthDisplay} — one tab per region, plus a Summary tab.`}
+          >
+            <Download size={13} />
+            Export Excel
+          </button>
+          <span className="text-[11px] uppercase tracking-[0.1em] text-[color:var(--muted-spec)]">
+            Click a region to drill in
+          </span>
+        </div>
       </div>
 
       {/* Grand-total cards across every region. */}
