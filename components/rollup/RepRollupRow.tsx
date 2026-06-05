@@ -16,11 +16,23 @@ import {
   weightedTotalFor,
 } from "@/lib/forecast/repMetrics";
 import { DOC_TYPE_LABELS } from "@/types";
+import { EditableActualCell } from "./EditableActualCell";
 
 interface RepRollupRowProps {
   repName: string;
   region: string;
   customers: Customer[];
+  /**
+   * Viewer permission: when true, the EXISTING rows' "Actual $" cell becomes
+   * an EditableActualCell. False (default) keeps the cell read-only.
+   * Granted to manager / VP / admin viewers in /team.
+   *
+   * Plumbing only — RepRollupRow itself never adds any new hooks for this;
+   * the editable cell is a separate component that owns its own hook state.
+   */
+  canEditActuals?: boolean;
+  /** Required when canEditActuals is true — used as the per-month write path. */
+  viewMonth?: string;
 }
 
 const ON_TRACK_TEXT: Record<ReturnType<typeof onTrackStatusFor>, string> = {
@@ -35,7 +47,13 @@ const TOP_GRID  = "grid grid-cols-[24px_2fr_1fr_1fr_1fr_1fr_140px] gap-3";
 // Timeline column added for parity with the rep dashboard (read-only here).
 const MINI_GRID = "grid grid-cols-[2fr_80px_120px_100px_100px_72px_130px] gap-2";
 
-export function RepRollupRow({ repName, region, customers }: RepRollupRowProps) {
+export function RepRollupRow({
+  repName,
+  region,
+  customers,
+  canEditActuals = false,
+  viewMonth,
+}: RepRollupRowProps) {
   const [expanded, setExpanded] = useState(false);
   const metrics = calcRepMetrics(customers);
   const trackStatus = onTrackStatusFor(metrics.existingOnTrackPct);
@@ -147,10 +165,23 @@ export function RepRollupRow({ repName, region, customers }: RepRollupRowProps) 
                             ? formatDollars(c.expectedMonthlyTotal ?? 0)
                             : formatDollars(c.expectedMonthly ?? 0)}
                         </div>
+                        {/* Close % (NEW, read-only) / Actual $ (EXISTING).
+                            EXISTING Actual $ becomes editable when the viewer
+                            is a manager/VP/admin and viewMonth is set. The
+                            editable variant owns its own hooks; this branch is
+                            a plain conditional render — no hooks added here. */}
                         <div className="text-right tabular-nums text-[color:var(--text-spec)]">
-                          {isNew
-                            ? `${c.closeProbability ?? 0}%`
-                            : formatDollars(c.actualThisMonth ?? 0)}
+                          {isNew ? (
+                            `${c.closeProbability ?? 0}%`
+                          ) : canEditActuals && viewMonth ? (
+                            <EditableActualCell
+                              customerId={c.id}
+                              monthKey={viewMonth}
+                              initialValue={c.actualThisMonth}
+                            />
+                          ) : (
+                            formatDollars(c.actualThisMonth ?? 0)
+                          )}
                         </div>
                         <div className="text-[11px] text-[color:var(--text-spec)] tabular-nums">
                           {isNew ? (c.closeWindow ? `${c.closeWindow} days` : "—") : "—"}

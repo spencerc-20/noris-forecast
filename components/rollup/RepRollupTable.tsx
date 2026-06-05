@@ -14,11 +14,20 @@ export interface RepRollupEntry {
 interface RepRollupTableProps {
   reps: RepRollupEntry[];
   emptyLabel?: string;
+  /** Manager / VP / admin can edit the Actual $ on EXISTING drilldown rows. */
+  canEditActuals?: boolean;
+  /** Required when canEditActuals is true (per-month write path). */
+  viewMonth?: string;
 }
 
 const GRID = "grid grid-cols-[24px_2fr_1fr_1fr_1fr_1fr_140px] gap-3";
 
-export function RepRollupTable({ reps, emptyLabel = "No reps to display." }: RepRollupTableProps) {
+export function RepRollupTable({
+  reps,
+  emptyLabel = "No reps to display.",
+  canEditActuals = false,
+  viewMonth,
+}: RepRollupTableProps) {
   return (
     <div className="rounded-xl border border-[color:var(--border-spec)] bg-[color:var(--surface)] overflow-hidden">
       <div
@@ -44,6 +53,8 @@ export function RepRollupTable({ reps, emptyLabel = "No reps to display." }: Rep
             repName={r.name}
             region={r.region}
             customers={r.customers}
+            canEditActuals={canEditActuals}
+            viewMonth={viewMonth}
           />
         ))
       )}

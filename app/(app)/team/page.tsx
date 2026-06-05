@@ -169,7 +169,17 @@ export default function TeamPage() {
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-[color:var(--border-spec)] border-t-[color:var(--noris)]" />
         </div>
       ) : (
-        <RepRollupTable reps={entries} emptyLabel="No reps in this region yet." />
+        <RepRollupTable
+          reps={entries}
+          emptyLabel="No reps in this region yet."
+          // Manager / VP / admin can edit the EXISTING Actual $ cells in the
+          // drilldown. Reps don't have nav access to /team so this is moot
+          // for them. Derived booleans only — no new hooks added.
+          canEditActuals={
+            !!appUser && (isManager(appUser) || isVP(appUser) || isAdmin(appUser))
+          }
+          viewMonth={viewMonth}
+        />
       )}
     </div>
   );
