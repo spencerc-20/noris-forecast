@@ -29,6 +29,7 @@ import { SaveStatusBadge } from "@/components/rep/SaveStatusBadge";
 import { AddToPipelineModal } from "@/components/rep/AddToPipelineModal";
 import { ConfirmDialog } from "@/components/rep/ConfirmDialog";
 import { RepForecastBox } from "@/components/rep/RepForecastBox";
+import { PaceTracker } from "@/components/rep/PaceTracker";
 import type { Customer, DocType, MonthData, PipelineType } from "@/types";
 import type { EditableField, FieldValue } from "@/components/rep/RepListRow";
 
@@ -285,8 +286,13 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Rep's gut-call forecast box — independent of the math below. */}
-      <RepForecastBox repId={appUser.id} monthKey={viewMonth} />
+      {/* Forecast (gut-call) + Pace tracker, side-by-side, equal width.
+          Both write to forecast_v1/repForecasts/{uid}/{viewMonth}/* — Forecast
+          to /forecast, Pace to /currentRevenue. Pace reads forecast too. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <RepForecastBox repId={appUser.id} monthKey={viewMonth} />
+        <PaceTracker     repId={appUser.id} monthKey={viewMonth} />
+      </div>
 
       <MetricCards metrics={metrics} />
 

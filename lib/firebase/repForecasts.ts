@@ -1,17 +1,46 @@
-// lib/firebase/repForecasts.ts — Per-rep per-month gut-call forecast number.
+// lib/firebase/repForecasts.ts — Per-rep per-month forecast + pace tracking.
 //
-// Stored separately from the per-customer row math. Path:
-//   forecast_v1/repForecasts/{repId}/{YYYY-MM} : number   (dollars, integer)
+// Storage shape (post-migrateRepForecastsToObject):
 //
-// This is the rep's manual "I think I'll do $X this month" number — the V2
-// VP-forecast-box equivalent. Independent of weighted/combined totals; the
-// dashboard renders both side-by-side so managers can see the rep's own
-// call AND the math.
+//   forecast_v1/repForecasts/{repId}/{YYYY-MM} = {
+//     forecast?:        number,   // rep's manual gut-call for the month
+//     currentRevenue?:  number,   // rep's running revenue tally for the month
+//   }
+//
+// Back-compat: any path that's still a bare scalar (`= 5000`) is interpreted
+// as `{forecast: 5000, currentRevenue: undefined}` on read. Writes always
+// target the sub-key (.../forecast or .../currentRevenue), which means
+// RTDB auto-creates the wrapper object if needed. The migration script
+// `scripts/migrateRepForecastsToObject.py` ran against prod and converted
+// every pre-existing scalar — leaving the back-compat read paths as belt-
+// and-braces for any record that might predate it.
 
 import { ref, get, set, onValue } from "firebase/database";
 import { db } from "./client";
 
 const REP_FORECASTS_PATH = "forecast_v1/repForecasts";
+
+// ── Internal: normalize either shape to {forecast?, currentRevenue?} ────────
+
+interface RepMonthEntry {
+  forecast?: number;
+  currentRevenue?: number;
+}
+
+function normalize(value: unknown): RepMonthEntry {
+  if (value == null) return {};
+  if (typeof value === "number") return { forecast: value };
+  if (typeof value === "object") {
+    const v = value as { forecast?: unknown; currentRevenue?: unknown };
+    return {
+      forecast:       typeof v.forecast       === "number" ? v.forecast       : undefined,
+      currentRevenue: typeof v.currentRevenue === "number" ? v.currentRevenue : undefined,
+    };
+  }
+  return {};
+}
+
+// ── Forecast ────────────────────────────────────────────────────────────────
 
 /** Read a single rep's forecast for a given month (returns null if unset). */
 export async function getRepForecast(
@@ -20,22 +49,17 @@ export async function getRepForecast(
 ): Promise<number | null> {
   const snap = await get(ref(db, `${REP_FORECASTS_PATH}/${repId}/${monthKey}`));
   if (!snap.exists()) return null;
-  const v = snap.val();
-  return typeof v === "number" ? v : null;
+  return normalize(snap.val()).forecast ?? null;
 }
 
-/** Live subscription: callback fires every time the rep's forecast for the month changes. */
+/** Live subscription: callback fires every time the rep's forecast changes. */
 export function subscribeToRepForecast(
   repId: string,
   monthKey: string,
   callback: (value: number | null) => void
 ): () => void {
   return onValue(ref(db, `${REP_FORECASTS_PATH}/${repId}/${monthKey}`), (snap) => {
-    if (!snap.exists()) callback(null);
-    else {
-      const v = snap.val();
-      callback(typeof v === "number" ? v : null);
-    }
+    callback(snap.exists() ? normalize(snap.val()).forecast ?? null : null);
   });
 }
 
@@ -45,16 +69,48 @@ export async function setRepForecast(
   monthKey: string,
   value: number | null
 ): Promise<void> {
-  await set(ref(db, `${REP_FORECASTS_PATH}/${repId}/${monthKey}`), value);
+  // Target the /forecast sub-key directly. RTDB upgrades a scalar parent
+  // into an object the first time you write a child — but the migration
+  // already did that for every existing scalar, so this is normally just
+  // a flat write into an existing object.
+  await set(ref(db, `${REP_FORECASTS_PATH}/${repId}/${monthKey}/forecast`), value);
 }
 
-/**
- * One-shot read of every rep's forecast for a given month. Useful for the
- * /team and /region rollups that want to display the manual calls alongside
- * the computed totals (one fetch instead of N).
- *
- * Returns: { repId: forecast$ } — reps with no forecast set are omitted.
- */
+// ── Current revenue (Pace tracker) ──────────────────────────────────────────
+
+/** Read a rep's running revenue for the month (returns null if unset). */
+export async function getRepCurrentRevenue(
+  repId: string,
+  monthKey: string
+): Promise<number | null> {
+  const snap = await get(ref(db, `${REP_FORECASTS_PATH}/${repId}/${monthKey}`));
+  if (!snap.exists()) return null;
+  return normalize(snap.val()).currentRevenue ?? null;
+}
+
+/** Live subscription: rep's running revenue for the month. */
+export function subscribeToRepCurrentRevenue(
+  repId: string,
+  monthKey: string,
+  callback: (value: number | null) => void
+): () => void {
+  return onValue(ref(db, `${REP_FORECASTS_PATH}/${repId}/${monthKey}`), (snap) => {
+    callback(snap.exists() ? normalize(snap.val()).currentRevenue ?? null : null);
+  });
+}
+
+/** Write the rep's running revenue. Pass null to clear it. */
+export async function setRepCurrentRevenue(
+  repId: string,
+  monthKey: string,
+  value: number | null
+): Promise<void> {
+  await set(ref(db, `${REP_FORECASTS_PATH}/${repId}/${monthKey}/currentRevenue`), value);
+}
+
+// ── Bulk: every rep's forecast for a month (used by the CSV/XLSX exports) ────
+
+/** One-shot read of every rep's forecast for `monthKey`. Omits unset reps. */
 export async function getAllRepForecastsForMonth(
   monthKey: string
 ): Promise<Record<string, number>> {
@@ -64,7 +120,8 @@ export async function getAllRepForecastsForMonth(
   snap.forEach((child) => {
     const repId = child.key!;
     const monthVal = child.child(monthKey).val();
-    if (typeof monthVal === "number") out[repId] = monthVal;
+    const f = normalize(monthVal).forecast;
+    if (f != null) out[repId] = f;
   });
   return out;
 }
